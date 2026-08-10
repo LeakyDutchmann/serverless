@@ -1,12 +1,13 @@
 use super::model::Route;
-use super::api::deploy::deploy;
+use super::api::deployment::handler::deploy;
 use super::api::execute::execute;
 use super::api::delete::delete;
 
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use sqlx::MySqlPool;
 
-pub async fn handle_connection(mut stream: TcpStream) {
+pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool) {
     let mut buffer = [0u8; 4096];
     let n = stream.read(&mut buffer).await.unwrap();    
     let request_string = String::from_utf8_lossy(&buffer[0..n]).into_owned();
@@ -14,7 +15,7 @@ pub async fn handle_connection(mut stream: TcpStream) {
     match method.as_str() {
         "POST" => {
             if path.starts_with("/functions") {
-                deploy(stream, &buffer, &path).await;
+                deploy(stream, &buffer, &path, db_pool).await;
             } else if path.starts_with("/invoke") {
                 execute(stream, &buffer, &path).await;
             }

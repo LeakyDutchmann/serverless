@@ -1,3 +1,3 @@
-pub mod deploy;
+pub mod deployment;
 pub mod delete;
 pub mod execute;
