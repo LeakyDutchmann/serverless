@@ -138,9 +138,10 @@ impl Scheduler {
                 }
             }
         });
+        let hb_tx = load_tx.clone();
         let heartbeat_loop = tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(3));
-            let sender = load_tx.clone();
+            let sender = hb_tx.clone();
             loop {
                 interval.tick().await;
                 let heartbeat_map = h_map.read().await;
@@ -151,6 +152,7 @@ impl Scheduler {
                 }
             }
         });
+        let load_tx = load_tx.clone();
         let load_loop = tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(3));
             
@@ -170,12 +172,15 @@ impl Scheduler {
                 if idle_workers.len() >= 4 {
                     let ids = idle_workers.iter().take(4).cloned().collect::<Vec<usize>>();
                     let _ = load_tx.send(SchedulerCommand::Downgrade(ids)).await;
-                    println!("Sent downgrade command");
+                    println!("Sent downgrade command");  
+                    continue;
                 }
                 if busy_workes.len() as f64 >= map.len() as f64 * 0.75 {
                     let _ = load_tx.send(SchedulerCommand::Upgrade(4)).await;
                     println!("Sent upgrade command");
+                    continue;
                 }
+                
             }
         });
         self.load_task = Some(load_loop);
