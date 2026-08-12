@@ -21,14 +21,12 @@ pub struct Worker {
     pub task: JoinHandle<()>,
     pub id: usize,
     pub sender: Sender<Message>,
-    pub feedback_recv: Option<Receiver<WorkerSignal>>,
     pub load: usize,
 }
 
 impl Worker {
-    pub async fn spawn(id: usize, db_pool: MySqlPool) -> Self {
+    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>) -> Self {
         let (tx, mut rx) = channel::<Message>(1024);
-        let (fb_tx, fb_rx) = channel::<WorkerSignal>(1024);
         let mut heartbeat = interval(Duration::from_secs(3));
         let task = tokio::spawn(async move {
             loop {
@@ -82,7 +80,6 @@ impl Worker {
             task,
             id,
             sender: tx,
-            feedback_recv: Some(fb_rx),
             load: 0,
         }
         

@@ -1,4 +1,4 @@
-use crate::workers::model::{Worker, WorkerSignal};
+use crate::workers::model::{Worker, WorkerSignal, Message};
 
 use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};
 use sqlx::MySqlPool;
@@ -15,59 +15,42 @@ use tokio::time::Duration;
 pub enum SchedulerCommand {
     Upgrade(usize),
     Downgrade(Vec<usize>),
+    DropDeadWorker(usize)
 }
 
 pub struct Scheduler {
     pub workers: Arc<RwLock<Vec<Worker>>>,
     pub rx: Option<Receiver<String>>,
     pub load_rx: Option<Receiver<usize>>,
+    pub feedback_tx: Option<Sender<WorkerSignal>>,
     pub feedback_rx: Option<Receiver<WorkerSignal>>,
-    pub feedback_task: Option<JoinHandle<()>>,
     pub scheduler_task: Option<JoinHandle<()>>,
     pub heartbeat_task: Option<JoinHandle<()>>,
     pub load_task: Option<JoinHandle<()>>,
+    pub db_pool: MySqlPool,
 }
 
 impl Scheduler {
     pub async fn intialize(worker_amount: usize, rx: Receiver<String>, db_pool: MySqlPool) -> Self {
         let mut workers = Vec::new();
+        let (fb_tx, fb_rx) = channel::<WorkerSignal>(1024);
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
-            let worker = Worker::spawn(i, pool).await;
+            let worker = Worker::spawn(i, pool, fb_tx.clone()).await;
             workers.push(worker);
         }
-        let (tx, fb_rx) = channel::<WorkerSignal>(1024);
-        let mut scheduler = Scheduler {
+        let scheduler = Scheduler {
             workers: Arc::new(RwLock::new(workers)),
             rx: Some(rx),
+            feedback_tx: Some(fb_tx),
             feedback_rx: Some(fb_rx),
-            feedback_task: None,
             load_rx: None,
             load_task: None,
             scheduler_task: None,
             heartbeat_task: None,
-        };
-        scheduler.start_feedback_listener(tx).await;
-        
+            db_pool,
+        }; 
         scheduler
-    }
-    pub async fn start_feedback_listener(&mut self, tx: Sender<WorkerSignal>) {
-        let mut receivers: Vec<ReceiverStream<WorkerSignal>> = Vec::new();
-        
-        let lock_workers = Arc::clone(&self.workers);
-        let mut workers = lock_workers.write().await;
-        
-        for worker in workers.iter_mut() {
-            let stream = ReceiverStream::new(worker.feedback_recv.take().unwrap());
-            receivers.push(stream);
-        }
-        let task = tokio::spawn(async move {
-            let mut stream = futures::stream::select_all(receivers);
-            while let Some(signal) = stream.next().await {
-                let _ = tx.send(signal).await;
-            }
-        });
-        self.feedback_task = Some(task);
     }
     pub fn run(&mut self) {
         if self.rx.is_none() || self.feedback_rx.is_none() {
@@ -82,6 +65,11 @@ impl Scheduler {
         let load_map: Arc<RwLock<HashMap<usize, usize>>> = Arc::new(RwLock::new(HashMap::new()));
         let l_map = Arc::clone(&load_map);
         let h_map = Arc::clone(&heartbeat_map);
+
+        let db_pool = self.db_pool.clone();
+        let feedback_tx = self.feedback_tx.clone().unwrap();
+        let workers = Arc::clone(&self.workers);
+        
         let main_loop = tokio::spawn(async move {
             loop {
                 select! {
@@ -132,10 +120,18 @@ impl Scheduler {
                     Some(cmd) = load_rx.recv() => {
                         match cmd {
                             SchedulerCommand::Upgrade(n) => {
-                                
+                                let db_pool = db_pool.clone();
+                                let feedback_tx = feedback_tx.clone();
+                                let workers = workers.clone();
+                                tokio::spawn(async move {
+                                    upgrade(workers.clone(), n, db_pool.clone(), feedback_tx.clone()).await;
+                                });
                             }
                             SchedulerCommand::Downgrade(n) => {
-                                
+                                downgrade(workers.clone(), n).await;
+                            }
+                            SchedulerCommand::DropDeadWorker(n) => {
+                                drop_dead_worker(workers.clone(), n).await;
                             }
                         }
                     }
@@ -144,12 +140,13 @@ impl Scheduler {
         });
         let heartbeat_loop = tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(3));
+            let sender = load_tx.clone();
             loop {
                 interval.tick().await;
                 let heartbeat_map = h_map.read().await;
                 for (id, last_heartbeat) in heartbeat_map.iter() {
                     if Instant::now().duration_since(*last_heartbeat) > Duration::from_secs(3) {
-                        //implement dead workers dropping
+                        let _ = sender.send(SchedulerCommand::DropDeadWorker(*id)).await;
                     }
                 }
             }
@@ -187,18 +184,30 @@ impl Scheduler {
     }
 }
 
-pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool) {
+pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>) {
     let mut workers = workers.write().await;
     let last_id = workers.len();
-    for id in last_id..amount {
-        let worker = Worker::spawn(id, db_pool.clone()).await;
+    for id in last_id..last_id + amount {
+        let worker = Worker::spawn(id, db_pool.clone(), tx.clone()).await;
         workers.push(worker);
     }
 }
 
 pub async fn downgrade(workers: Arc<RwLock<Vec<Worker>>>, to_remove: Vec<usize>) {
     let mut workers = workers.write().await;
+    for worker in workers.iter() {
+        if to_remove.contains(&worker.id) {
+            let _ = worker.sender.send(Message::Stop("Worker {} was downgraded".into())).await;
+        }
+    }
     workers.retain(|w| !to_remove.contains(&w.id))
 }
 
-//now you have to connect new workers and disconnect old ones! Shit!
+pub async fn drop_dead_worker(workers: Arc<RwLock<Vec<Worker>>>, to_remove: usize) {
+    let mut workers = workers.write().await;
+    if let Some(pos) = workers.iter().position(|w| w.id == to_remove) {
+        workers[pos].task.abort();
+        workers.remove(pos);
+    }
+}
+
