@@ -19,6 +19,7 @@ pub enum SchedulerCommand {
 }
 
 pub struct Scheduler {
+    pub max_workers: usize,
     pub workers: Arc<RwLock<Vec<Worker>>>,
     pub rx: Option<Receiver<String>>,
     pub load_rx: Option<Receiver<usize>>,
@@ -31,7 +32,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub async fn intialize(worker_amount: usize, rx: Receiver<String>, db_pool: MySqlPool) -> Self {
+    pub async fn intialize(worker_amount: usize, max_workers: usize, rx: Receiver<String>, db_pool: MySqlPool) -> Self {
         let mut workers = Vec::new();
         let (fb_tx, fb_rx) = channel::<WorkerSignal>(1024);
         for i in 1..=worker_amount {
@@ -40,6 +41,7 @@ impl Scheduler {
             workers.push(worker);
         }
         let scheduler = Scheduler {
+            max_workers: max_workers,
             workers: Arc::new(RwLock::new(workers)),
             rx: Some(rx),
             feedback_tx: Some(fb_tx),
@@ -52,7 +54,7 @@ impl Scheduler {
         }; 
         scheduler
     }
-    pub fn run(&mut self) {
+    pub async fn run(&mut self) {
         if self.rx.is_none() || self.feedback_rx.is_none() {
             panic!("Main feedback and tasks receivers not found for scheduler, panicking!");
         }
@@ -64,11 +66,13 @@ impl Scheduler {
         let heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>> = Arc::new(RwLock::new(HashMap::new()));
         let load_map: Arc<RwLock<HashMap<usize, usize>>> = Arc::new(RwLock::new(HashMap::new()));
         let l_map = Arc::clone(&load_map);
+        let l_map_2 = Arc::clone(&l_map);
         let h_map = Arc::clone(&heartbeat_map);
 
         let db_pool = self.db_pool.clone();
         let feedback_tx = self.feedback_tx.clone().unwrap();
         let workers = Arc::clone(&self.workers);
+        let workers_clone = Arc::clone(&self.workers);
         
         let main_loop = tokio::spawn(async move {
             loop {
@@ -115,7 +119,26 @@ impl Scheduler {
                         }
                     }
                     Some(task) = rx.recv() => {
-                        //handle!
+                        println!("Got request to run this function: {:?}", task);
+                        let workers = workers_clone.clone();
+                        let l_map = l_map_2.clone();
+                        tokio::spawn(async move {
+                            let workers = workers.read().await;
+                            let map = l_map.read().await;
+                            if let Some((id, _)) = map.iter().min_by_key(|(_, v)| *v) {
+                                if let Some(worker) = workers.get(*id) {
+                                    let result = worker.sender.send(Message::Job(task)).await;
+                                    match result {
+                                        Ok(_) => {}
+                                        Err(e) => println!("Failed to send job to worker: {}", e),
+                                    }
+                                } else {
+                                    println!("Couldn't pick a worker, because load map contains exactly 0 elements");
+                                }
+                            } else {
+                                println!("Couldn't pick a worker, because load map contains exactly 0 elements");
+                            }
+                        });
                     }
                     Some(cmd) = load_rx.recv() => {
                         match cmd {
@@ -152,10 +175,11 @@ impl Scheduler {
                 }
             }
         });
+        let max_workers = self.max_workers;
         let load_tx = load_tx.clone();
         let load_loop = tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(3));
-            
+            let max_workers = max_workers;
             loop {
                 interval.tick().await;
                 let map = l_map.read().await;
@@ -170,15 +194,21 @@ impl Scheduler {
                     }
                 }
                 if idle_workers.len() >= 4 {
-                    let ids = idle_workers.iter().take(4).cloned().collect::<Vec<usize>>();
-                    let _ = load_tx.send(SchedulerCommand::Downgrade(ids)).await;
-                    println!("Sent downgrade command");  
-                    continue;
+                    if map.len() >= 8 {
+                        let ids = idle_workers.iter().take(4).cloned().collect::<Vec<usize>>();
+                        let _ = load_tx.send(SchedulerCommand::Downgrade(ids)).await;
+                        println!("Sent downgrade command");  
+                        continue
+                    }
+                   ;
                 }
                 if busy_workes.len() as f64 >= map.len() as f64 * 0.75 {
-                    let _ = load_tx.send(SchedulerCommand::Upgrade(4)).await;
-                    println!("Sent upgrade command");
-                    continue;
+                    if map.len() + 4 <= max_workers {
+                        let _ = load_tx.send(SchedulerCommand::Upgrade(4)).await;
+                        println!("Sent upgrade command");
+                        continue; 
+                    }
+                    
                 }
                 
             }
@@ -211,7 +241,7 @@ pub async fn downgrade(workers: Arc<RwLock<Vec<Worker>>>, to_remove: Vec<usize>)
 pub async fn drop_dead_worker(workers: Arc<RwLock<Vec<Worker>>>, to_remove: usize) {
     let mut workers = workers.write().await;
     if let Some(pos) = workers.iter().position(|w| w.id == to_remove) {
-        workers[pos].task.abort();
+        workers[pos].main_loop.abort();
         workers.remove(pos);
     }
 }

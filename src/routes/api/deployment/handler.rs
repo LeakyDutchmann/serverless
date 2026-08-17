@@ -1,8 +1,10 @@
 use crate::http::response::{Response, StatusCode, send};
 use super::chunk_parser::parser::{get_wasm_chunked, get_wasm_code};
+use super::validation::core::validate_wasm_module;
 
 use tokio::net::TcpStream;
 use sqlx::MySqlPool;
+use wasmtime::{Engine, Module};
 
 pub fn get_function_name(path: &str) -> String {
     let new = path.split('/').last().unwrap_or("").to_string();
@@ -20,22 +22,35 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
     };
     match wasm {
         Ok(wasm) => {
-            let result = sqlx::query("INSERT INTO functions(name, wasm) value(?, ?)")
-                .bind(&function_name)
-                .bind(&wasm)
-                .execute(&db_pool)
-                .await;
-            match result {
-                Ok(_) => {
-                    let response = Response::text(StatusCode::Ok, format!("Function was succesfully deployed at {}", &path));
-                    send(&mut stream, &response).await
+            let path = path.to_string();
+            tokio::spawn(async move {
+                let engine = Engine::default();
+                let module = Module::new(&engine, &wasm).expect("Failed to create wasm module from wasm code");
+                match validate_wasm_module(&engine, &module).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        let response = Response::text(StatusCode::BadRequest, format!("Failed to deploy function at path {}: {}", &path, e));
+                        send(&mut stream, &response).await
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Error while deploying: {}", e);
-                    let response = Response::text(StatusCode::IntServerError, format!("Failed to deploy function at path {}: {}",&path, e));
-                    send(&mut stream, &response).await
+                let result = sqlx::query("INSERT INTO functions(name, wasm) value(?, ?)")
+                    .bind(&function_name)
+                    .bind(&wasm)
+                    .execute(&db_pool)
+                    .await;
+                match result {
+                    Ok(_) => {
+                        let response = Response::text(StatusCode::Ok, format!("Function was succesfully deployed at {}", &path));
+                        send(&mut stream, &response).await
+                    }
+                    Err(e) => {
+                        eprintln!("Error while deploying: {}", e);
+                        let response = Response::text(StatusCode::IntServerError, format!("Failed to deploy function at path {}: {}",&path, e));
+                        send(&mut stream, &response).await
+                    }
                 }
-            }
+            });
         }
         Err(e) => {
             eprintln!("Error occured after attempt to read wasm file: {}", e);
@@ -44,3 +59,4 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
         }
     }
 }
+

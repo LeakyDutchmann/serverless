@@ -1,5 +1,6 @@
 use serverless::routes::net::handle_connection;
 use serverless::database::connection::connect;
+use serverless::scheduler::model::Scheduler;
 
 
 use tokio::net::{TcpListener, TcpStream};
@@ -15,7 +16,10 @@ async fn main() {
     //using .expect() here to make sure program stops if connection failed.
     let db_pool = connect(&db_url, 10).await.expect("Failed to connect to a database, panicking!");
 
-    //Spawn workers
+    //Start scheduler and spawn workers!
+    let mut scheduler = Scheduler::intialize(4, 20, rx, db_pool.clone()).await;
+    scheduler.run().await;
+    println!("Scheduler is running successfully");
     
     loop {
         let (stream, _) = listener.accept().await.unwrap();
