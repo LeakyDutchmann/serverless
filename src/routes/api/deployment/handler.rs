@@ -12,7 +12,7 @@ pub fn get_function_name(path: &str) -> String {
     new
 }
 
-pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: MySqlPool) {
+pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: MySqlPool, wasm_engine: Engine) {
     let function_name = get_function_name(path);
     let string_buffer = String::from_utf8_lossy(buffer).to_string();
     let wasm = if string_buffer.contains("Transfer-Encoding: chunked") {
@@ -24,13 +24,13 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
         Ok(wasm) => {
             let path = path.to_string();
             tokio::spawn(async move {
-                let engine = Engine::default();
+                let engine = wasm_engine;
                 let module = Module::new(&engine, &wasm).expect("Failed to create wasm module from wasm code");
                 match validate_wasm_module(&engine, &module).await {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("{}", e);
-                        let response = Response::text(StatusCode::BadRequest, format!("Failed to deploy function at path {}: {}", &path, e));
+                        let response = Response::json(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}: {}", &path, e)));
                         send(&mut stream, &response).await
                     }
                 }
@@ -41,12 +41,12 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
                     .await;
                 match result {
                     Ok(_) => {
-                        let response = Response::text(StatusCode::Ok, format!("Function was succesfully deployed at {}", &path));
+                        let response = Response::json(StatusCode::Ok, vec![], Some(format!("Function was succesfully deployed at {}", &path)));
                         send(&mut stream, &response).await
                     }
                     Err(e) => {
                         eprintln!("Error while deploying: {}", e);
-                        let response = Response::text(StatusCode::IntServerError, format!("Failed to deploy function at path {}: {}",&path, e));
+                        let response = Response::json(StatusCode::IntServerError, vec![], Some(format!("Failed to deploy function at path {}: {}",&path, e)));
                         send(&mut stream, &response).await
                     }
                 }
@@ -54,7 +54,7 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
         }
         Err(e) => {
             eprintln!("Error occured after attempt to read wasm file: {}", e);
-            let response = Response::text(StatusCode::IntServerError, format!("Failed to read wasm file: {}", e));
+            let response = Response::json(StatusCode::IntServerError, vec![], Some(format!("Failed to read wasm file: {}", e)));
             send(&mut stream, &response).await
         }
     }

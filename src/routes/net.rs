@@ -2,14 +2,15 @@ use super::model::Route;
 use super::api::deployment::handler::deploy;
 use super::api::execute::execute;
 use super::api::delete::delete;
-use crate::workers::model::Message;
+use crate::scheduler::model::Job;
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use sqlx::MySqlPool;
+use wasmtime::Engine;
 
-pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Sender<String>) {
+pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Sender<Job>, wasm_engine: Engine) {
     let mut buffer = [0u8; 4096];
     let n = stream.read(&mut buffer).await.unwrap();    
     let request_string = String::from_utf8_lossy(&buffer[0..n]).into_owned();
@@ -17,9 +18,9 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
     match method.as_str() {
         "POST" => {
             if path.starts_with("/functions") {
-                deploy(stream, &buffer, &path, db_pool).await;
+                deploy(stream, &buffer, &path, db_pool, wasm_engine).await;
             } else if path.starts_with("/invoke") {
-                execute(stream, &path, tx).await;
+                execute(stream, &buffer, &path, tx).await;
             }
         },
         "DELETE" => {

@@ -1,5 +1,5 @@
 use super::memory::validate_memory_exported;
-use super::functions::validate_alloc;
+use super::functions::{validate_alloc, validate_main};
 
 use wasmtime::{Module, ExternType};
 
@@ -53,7 +53,16 @@ pub fn validate_wasm_exports(module: &Module) -> anyhow::Result<()> {
                             has_forbiden = true;
                             break;
                         }
-                        has_main = true;
+                        match validate_main(kind) {
+                            Ok(_) => {
+                                has_main = true;
+                            }
+                            Err(e) => {
+                                has_forbiden = true;
+                                eprintln!("{}", e);
+                                break;
+                            }
+                        }
                     }
                     _ => {  
                         println!("Wasm module exports unexpected function: {}. Ignoring.", name);

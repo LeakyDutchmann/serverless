@@ -25,6 +25,34 @@ pub fn validate_alloc(kind: FuncType) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn validate_main(kind: FuncType) -> anyhow::Result<()>  {
+    let params: Vec<ValType> = kind.params().collect();
+    let returns: Vec<ValType> = kind.results().collect();
+    if params.len() != 2 {
+        return Err(anyhow::anyhow!("Alloc params must contain exactly one element of type i32"));
+    }
+    if returns.len() != 2 {
+        return Err(anyhow::anyhow!("Alloc return type must be exactly one element of type i32"));
+    }
+    for param in &params {
+        match param {
+            ValType::I32 => {}
+            _ => {
+                return Err(anyhow::anyhow!("Alloc parameter should be of type i32. Type found: {}", param));
+            }
+        }
+    }
+    for val in &returns {
+        match val {
+            ValType::I32 => {}
+            _ => {
+                return Err(anyhow::anyhow!("Alloc parameter should be of type i32. Type found: {}", val));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_alloc_pointer(ptr: u32, instance: &Instance, mut store: &mut Store<()>) -> anyhow::Result<()> {
     if ptr == 0 {
         return Err(anyhow::anyhow!("Alloc call returned pointer which = 0"));
