@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use tokio_stream::StreamExt;
 use tokio::select;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 
@@ -37,6 +37,8 @@ pub struct Scheduler {
     pub load_task: Option<JoinHandle<()>>,
     pub db_pool: MySqlPool,
 }
+
+static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
 impl Scheduler {
     pub async fn intialize(worker_amount: usize, max_workers: usize, rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
@@ -119,6 +121,7 @@ impl Scheduler {
                                         send(stream, &response).await;
                                         println!("Worker {} finished untracked task", w_id);
                                     }  
+                                    job_map.remove(&j_id);
                                 } else {
                                     println!("Worker {} finished task that belongs to no client. Task id: {}", w_id, j_id);
                                 }     
@@ -141,6 +144,7 @@ impl Scheduler {
                                         send(stream, &response).await;
                                         println!("Worker {} failed untracked task", w_id);
                                     }
+                                    job_map.remove(&j_id);
                                 } else {
                                     println!("Worker {} failed task that belongs to no client. Task id: {}, reason {}", w_id, j_id, reason);
                                 }   
@@ -157,7 +161,7 @@ impl Scheduler {
                             let map = l_map.read().await;
                             if let Some((id, _)) = map.iter().min_by_key(|(_, v)| *v) {
                                 if let Some(worker) = workers.get(*id) {
-                                    let j_id = generate_job_id(Arc::clone(&j_map)).await;
+                                    let j_id = generate_job_id().await;
                                     let result = worker.sender.send(Message::Job{path: task.path, input: task.input, j_id}).await;
                                     match result {
                                         Ok(_) => {
@@ -287,12 +291,12 @@ pub async fn drop_dead_worker(workers: Arc<RwLock<Vec<Worker>>>, to_remove: usiz
     let mut workers = workers.write().await;
     if let Some(pos) = workers.iter().position(|w| w.id == to_remove) {
         workers[pos].main_loop.abort();
+        workers[pos].jobs.read().await.iter().for_each(|j| j.abort());
         workers.remove(pos);
     }
 }
 
-pub async fn generate_job_id(j_map: Arc<RwLock<HashMap<usize, TcpStream>>>) -> usize {
-    let j_map = j_map.read().await;
-    let id = j_map.len();
-    id + 1
+pub async fn generate_job_id() -> usize {
+    let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+    id
 }
