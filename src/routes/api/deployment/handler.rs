@@ -18,30 +18,35 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
     let wasm = if string_buffer.contains("Transfer-Encoding: chunked") {
         get_wasm_chunked(&buffer, &string_buffer, &mut stream).await
     } else {
-        get_wasm_code(&buffer, &string_buffer)
+        get_wasm_code(&buffer, &string_buffer, &mut stream).await
     };
     match wasm {
         Ok(wasm) => {
             let path = path.to_string();
             tokio::spawn(async move {
                 let engine = wasm_engine;
+                println!("{:02x?}", &wasm[..16]);
                 let module = Module::new(&engine, &wasm).expect("Failed to create wasm module from wasm code");
                 match validate_wasm_module(&engine, &module).await {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("{}", e);
                         let response = Response::json(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}: {}", &path, e)));
-                        send(&mut stream, &response).await
+                        send(&mut stream, &response).await;
+                        return;
                     }
                 }
-                let result = sqlx::query("INSERT INTO functions(name, wasm) value(?, ?)")
+                let result = sqlx::query("INSERT INTO functions(path, wasm) value(?, ?)")
                     .bind(&function_name)
                     .bind(&wasm)
                     .execute(&db_pool)
                     .await;
                 match result {
                     Ok(_) => {
-                        let response = Response::json(StatusCode::Ok, vec![], Some(format!("Function was succesfully deployed at {}", &path)));
+                        let status = "function was succesfully deployed at ".to_string();
+                        let status = status + &path;
+                        let result = status.as_bytes().to_vec();
+                        let response = Response::json(StatusCode::Ok, result, None);
                         send(&mut stream, &response).await
                     }
                     Err(e) => {

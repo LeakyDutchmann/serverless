@@ -57,7 +57,7 @@ impl Worker {
                             Message::Job{path, input, j_id} => {
                                 let job = tokio::spawn(async move {
                                     let _ = fb.send(WorkerSignal::Working{w_id: id, j_id}).await;
-                                    let result = sqlx::query("SELECT wasm FROM functions WHERE name = ?")
+                                    let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
                                         .bind(&path)
                                         .fetch_optional(&db)
                                         .await;

@@ -5,10 +5,10 @@ pub fn validate_alloc(kind: FuncType) -> anyhow::Result<()> {
     let params: Vec<ValType> = kind.params().collect();
     let returns: Vec<ValType> = kind.results().collect();
     if params.len() != 1 {
-        return Err(anyhow::anyhow!("Alloc params must contain exactly one element of type i32"));
+        return Err(anyhow::anyhow!("Alloc params must contain exactly one element"));
     }
     if returns.len() != 1 {
-        return Err(anyhow::anyhow!("Alloc return type must be exactly one element of type i32"));
+        return Err(anyhow::anyhow!("Alloc return type must be exactly one element"));
     }
     match params[0] {
         ValType::I32 => {}
@@ -29,16 +29,16 @@ pub fn validate_main(kind: FuncType) -> anyhow::Result<()>  {
     let params: Vec<ValType> = kind.params().collect();
     let returns: Vec<ValType> = kind.results().collect();
     if params.len() != 2 {
-        return Err(anyhow::anyhow!("Alloc params must contain exactly one element of type i32"));
+        return Err(anyhow::anyhow!("Main params must contain exactly two elements"));
     }
     if returns.len() != 2 {
-        return Err(anyhow::anyhow!("Alloc return type must be exactly one element of type i32"));
+        return Err(anyhow::anyhow!("Main return must contain exactly two elements"));
     }
     for param in &params {
         match param {
             ValType::I32 => {}
             _ => {
-                return Err(anyhow::anyhow!("Alloc parameter should be of type i32. Type found: {}", param));
+                return Err(anyhow::anyhow!("Main parameter should be of type i32. Type found: {}", param));
             }
         }
     }
@@ -46,7 +46,7 @@ pub fn validate_main(kind: FuncType) -> anyhow::Result<()>  {
         match val {
             ValType::I32 => {}
             _ => {
-                return Err(anyhow::anyhow!("Alloc parameter should be of type i32. Type found: {}", val));
+                return Err(anyhow::anyhow!("Main parameter should be of type i32. Type found: {}", val));
             }
         }
     }

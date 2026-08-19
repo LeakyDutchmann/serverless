@@ -87,11 +87,53 @@ pub async fn read_chunks_from_buffer(buffer: &mut Vec<u8>, wasm_vec: &mut Vec<u8
 }
 
 //this should not return string, asshole!!!
-pub fn get_wasm_code<'a>(buffer: &'a [u8], string_buffer: &'a String) -> Result<Vec<u8>, ChunkReadingError> {
+pub async fn get_wasm_code<'a>(buffer: &'a [u8], string_buffer: &'a String, stream: &mut TcpStream) -> Result<Vec<u8>, ChunkReadingError> {
+    let len = get_body_len(string_buffer).unwrap();
     let body_idx = string_buffer.find("\r\n\r\n");
+    let mut wasm: Vec<u8> = Vec::new();
+    let mut int_buffer = [0u8; 4096];
     if let Some(idx) = body_idx {
-        Ok(buffer[idx + 4..].to_vec())
+        if buffer[idx + 4..].len() == len {
+            Ok(buffer[idx + 4..].to_vec())
+        } else {
+            wasm.extend_from_slice(&buffer[idx + 4..]);
+            while wasm.len() < len {
+                let n = match stream.read(&mut int_buffer).await {
+                    Ok(n) => n,
+                    Err(e) => {
+                        return Err(ChunkReadingError::IoError(e))
+                    },
+                };
+                if n == 0 {
+                    return Err(ChunkReadingError::UnexpectedEOF);
+                }
+                wasm.extend_from_slice(&int_buffer[..n]);
+            }
+            wasm.truncate(len);
+            Ok(wasm)
+        }
     } else {
         Err(ChunkReadingError::ParseError(HttpParseError::MissingBodySeparator))
     }
+}
+
+pub fn get_body_len(string_buffer: &str) -> Option<usize> {
+    let lines: Vec<String> = string_buffer.lines().map(|l| l.to_string()).collect();
+    for line in lines {
+        if line.starts_with("Content-Length") {
+            let parts: Vec<&str> = line.split(":").collect();
+            if parts.len() == 2 {
+                let result = usize::from_str_radix(parts[1].trim(), 10);
+                if let Ok(len) = result {
+                    println!("len {}", len);
+                    return Some(len);
+                } else {
+                    let err = result.err().unwrap();
+                    println!("Failedd to parse content-length: {}", err);
+                    return None;
+                }
+            }
+        }
+    }
+    None
 }
