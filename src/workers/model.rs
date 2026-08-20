@@ -1,3 +1,5 @@
+use crate::http::utils::get_function_name;
+
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::{Sender, Receiver};
 use tokio::sync::mpsc::channel;
@@ -55,10 +57,12 @@ impl Worker {
                                 break;
                             },
                             Message::Job{path, input, j_id} => {
+                                let func_name = get_function_name(&path);
                                 let job = tokio::spawn(async move {
                                     let _ = fb.send(WorkerSignal::Working{w_id: id, j_id}).await;
+                                    println!("fetching func on path: {}", path);
                                     let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
-                                        .bind(&path)
+                                        .bind(&func_name)
                                         .fetch_optional(&db)
                                         .await;
                                     match result {
@@ -69,8 +73,10 @@ impl Worker {
                                             let instance = Instance::new(&mut store, &module, &[]).unwrap();
                                             let alloc = instance.get_typed_func::<u32, u32>(&mut store, "alloc").unwrap();
                                             let ptr = alloc.call(&mut store, input.len() as u32).unwrap();
+                                            println!("Alloc returned pointer: {}", ptr);
                                             let memory = instance.get_memory(&mut store, "memory").unwrap();
                                             memory.write(&mut store, ptr as usize, &input).unwrap();
+                                            println!("Memory written {:?}", &input);
                                             let main = instance.get_typed_func::<(u32, u32), (u32, u32)>(&mut store, "main").unwrap();
                                             let result = main.call(&mut store, (ptr, input.len() as u32));
                                             if result.is_err() {
@@ -78,10 +84,12 @@ impl Worker {
                                                 return;
                                             }
                                             let (new_ptr, len) = result.unwrap();
+                                            println!("Result of main: (ptr: {}, len: {})", new_ptr, len);
                                             let mut buffer = vec![0u8; len as usize];
                                             let func_result = memory.read(&mut store, new_ptr as usize, &mut buffer);
                                             match func_result {
                                                 Ok(_) => {
+                                                    println!("Memory read successfully. Output: {:?}", buffer);
                                                     let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result: buffer}).await;
                                                 }
                                                 Err(e) => {

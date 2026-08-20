@@ -160,7 +160,7 @@ impl Scheduler {
                             let workers = workers.read().await;
                             let map = l_map.read().await;
                             if let Some((id, _)) = map.iter().min_by_key(|(_, v)| *v) {
-                                if let Some(worker) = workers.get(*id) {
+                                if let Some(worker) = workers.iter().find(|w| w.id == *id) {
                                     let j_id = generate_job_id().await;
                                     let result = worker.sender.send(Message::Job{path: task.path, input: task.input, j_id}).await;
                                     match result {
@@ -176,10 +176,12 @@ impl Scheduler {
                                         },
                                     }
                                 } else {
+                                    let vec = workers.iter().map(|w| w.id.clone()).collect::<Vec<_>>();
+                                    let s = vec.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ");
                                     let line = format!("Failed to attach task to a worker because of inconsistent worker id's");
                                     let response = Response::json(StatusCode::IntServerError, vec![], Some(line));
                                     send(&mut task.stream, &response).await;
-                                    println!("Tried to attach job to worker with id {}, but there is no such worker in worker pool", id);
+                                    println!("Tried to attach job to worker with id {}, but there is no such worker in worker pool. Workers available: {}", id, s);
                                 }
                             } else {
                                 let line = format!("Failed to attach task to a worker because there are no workers");

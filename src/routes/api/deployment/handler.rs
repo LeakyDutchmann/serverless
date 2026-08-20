@@ -1,4 +1,5 @@
 use crate::http::response::{Response, StatusCode, send};
+use crate::http::utils::get_function_name;
 use super::chunk_parser::parser::{get_wasm_chunked, get_wasm_code};
 use super::validation::core::validate_wasm_module;
 
@@ -6,11 +7,7 @@ use tokio::net::TcpStream;
 use sqlx::MySqlPool;
 use wasmtime::{Engine, Module};
 
-pub fn get_function_name(path: &str) -> String {
-    let new = path.split('/').last().unwrap_or("").to_string();
-    println!("path: {path}");
-    new
-}
+
 
 pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: MySqlPool, wasm_engine: Engine) {
     let function_name = get_function_name(path);

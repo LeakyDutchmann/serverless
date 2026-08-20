@@ -1,4 +1,4 @@
-use crate::http::utils::get_body_idx;
+use crate::http::utils::{get_body_idx, get_body_len};
 use super::models::{ChunkParserResult, ChunkReadingError, ChunkParserError, HttpParseError};
 
 use tokio::net::TcpStream;
@@ -39,7 +39,7 @@ pub async fn get_wasm_chunked<'a>(buffer: &'a [u8], string_buffer: &'a String, s
 }
 
 pub async fn read_chunks_from_buffer(buffer: &mut Vec<u8>, wasm_vec: &mut Vec<u8>) -> ChunkParserResult {
-    if buffer.is_empty() || !buffer[0].is_ascii_digit() {
+    if buffer.is_empty() || !buffer[0].is_ascii_hexdigit() {
         return ChunkParserResult::Error(
             ChunkParserError::TrailingGarbage { bytes: buffer[..buffer.len().min(8)].to_vec() }
         )
@@ -115,25 +115,4 @@ pub async fn get_wasm_code<'a>(buffer: &'a [u8], string_buffer: &'a String, stre
     } else {
         Err(ChunkReadingError::ParseError(HttpParseError::MissingBodySeparator))
     }
-}
-
-pub fn get_body_len(string_buffer: &str) -> Option<usize> {
-    let lines: Vec<String> = string_buffer.lines().map(|l| l.to_string()).collect();
-    for line in lines {
-        if line.starts_with("Content-Length") {
-            let parts: Vec<&str> = line.split(":").collect();
-            if parts.len() == 2 {
-                let result = usize::from_str_radix(parts[1].trim(), 10);
-                if let Ok(len) = result {
-                    println!("len {}", len);
-                    return Some(len);
-                } else {
-                    let err = result.err().unwrap();
-                    println!("Failedd to parse content-length: {}", err);
-                    return None;
-                }
-            }
-        }
-    }
-    None
 }
