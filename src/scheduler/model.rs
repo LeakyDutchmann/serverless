@@ -67,8 +67,8 @@ impl Scheduler {
         if self.rx.is_none() || self.feedback_rx.is_none() {
             panic!("Main feedback and tasks receivers not found for scheduler, panicking!");
         }
-        let mut rx = self.rx.take().unwrap();
-        let mut feedback_rx = self.feedback_rx.take().unwrap();
+        let mut rx = self.rx.take().expect("Scheduler job receiver not found");
+        let mut feedback_rx = self.feedback_rx.take().expect("Schedulet feedback receiver not found");
 
         let (load_tx, mut load_rx) = channel::<SchedulerCommand>(1024);
 
@@ -80,7 +80,7 @@ impl Scheduler {
         let h_map = Arc::clone(&heartbeat_map);
 
         let db_pool = self.db_pool.clone();
-        let feedback_tx = self.feedback_tx.clone().unwrap();
+        let feedback_tx = self.feedback_tx.clone().expect("Scheduler feedback sender not found");
         let workers = Arc::clone(&self.workers);
         let workers_clone = Arc::clone(&self.workers);
         
