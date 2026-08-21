@@ -30,6 +30,7 @@ pub async fn execute(mut stream: TcpStream, buffer: &[u8], path: &str, tx: Sende
                 stream,
             };
             let _ = tx.send(job).await;
+            println!("Job sent!");
         }
         Err(e) => {
             println!("Failed to wrap input value {:?}", e);

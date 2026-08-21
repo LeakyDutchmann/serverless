@@ -22,13 +22,19 @@ async fn main() {
 
     let wasm_engine = Engine::default();
     loop {
-        let (stream, _) = listener.accept().await.unwrap();
-        let tx_cloned = tx.clone();
-        let pool_cloned = db_pool.clone();
-        let engine_cloned = wasm_engine.clone();
-        tokio::spawn(async move {
-            println!("New connection!");
-            handle_connection(stream, pool_cloned, tx_cloned, engine_cloned).await;
-        });
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                let tx_cloned = tx.clone();
+                let pool_cloned = db_pool.clone();
+                let engine_cloned = wasm_engine.clone();
+                tokio::spawn(async move {
+                    println!("New connection!");
+                    handle_connection(stream, pool_cloned, tx_cloned, engine_cloned).await;
+                });
+            }
+            Err(e) => {
+                println!("Failed to accept connection: {}", e);
+            }
+        } 
     }
 }

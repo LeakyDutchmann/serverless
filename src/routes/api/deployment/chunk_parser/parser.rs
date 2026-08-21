@@ -39,11 +39,6 @@ pub async fn get_wasm_chunked<'a>(buffer: &'a [u8], string_buffer: &'a String, s
 }
 
 pub async fn read_chunks_from_buffer(buffer: &mut Vec<u8>, wasm_vec: &mut Vec<u8>) -> ChunkParserResult {
-    if buffer.is_empty() || !buffer[0].is_ascii_hexdigit() {
-        return ChunkParserResult::Error(
-            ChunkParserError::TrailingGarbage { bytes: buffer[..buffer.len().min(8)].to_vec() }
-        )
-    }
     loop {
         if let Some(pos) = buffer.windows(2).position(|w| w == b"\r\n") {
             let line = buffer[..pos].to_vec();
@@ -55,6 +50,18 @@ pub async fn read_chunks_from_buffer(buffer: &mut Vec<u8>, wasm_vec: &mut Vec<u8
             let hex = size_str.split(';').next().unwrap();
             if let Ok(chunk_size) = usize::from_str_radix(&hex, 16) {
                 if chunk_size == 0 {
+                    loop {
+                        if let Some(pos) = buffer.windows(2).position(|w| w == b"\r\n") {
+                            let line = buffer[..pos].to_vec();
+                            buffer.drain(..pos + 2);
+                            if line.is_empty() {
+                                break;
+                            }
+                            
+                        } else {
+                            return ChunkParserResult::NeedMoreData;
+                        }  
+                    }
                     break;
                 }
                 if buffer.len() >= chunk_size {
