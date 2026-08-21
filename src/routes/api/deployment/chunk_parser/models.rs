@@ -11,6 +11,7 @@ pub enum ChunkReadingError {
 
 pub enum HttpParseError {
     MissingBodySeparator,
+    InvalidHeader,
 }
 
 impl Display for HttpParseError {
@@ -18,6 +19,9 @@ impl Display for HttpParseError {
         match self {
             HttpParseError::MissingBodySeparator => {
                 write!(f, "Missing body separator")
+            }
+            HttpParseError::InvalidHeader => {
+                write!(f, "Invalid header")
             }
         }
     }

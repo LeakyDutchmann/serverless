@@ -1,6 +1,5 @@
 use crate::http::response::{Response, StatusCode, send};
 use crate::http::utils::get_function_name;
-use super::chunk_parser::parser::{get_wasm_chunked, get_wasm_code};
 use super::validation::core::validate_wasm_module;
 
 use tokio::net::TcpStream;
@@ -10,13 +9,12 @@ use wasmtime::{Engine, Module};
 
 
 pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: MySqlPool, wasm_engine: Engine) {
-    println!("Deploying function at path: {}", path);
     let function_name = get_function_name(path);
     let wasm = buffer.to_vec();
     let path = path.to_string();
     tokio::spawn(async move {
         let engine = wasm_engine;
-        println!("{:02x?}", &wasm[..16]);
+        // println!("{:02x?}", &wasm[..16]);
         let module = Module::new(&engine, &wasm).expect("Failed to create wasm module from wasm code");
         match validate_wasm_module(&engine, &module).await {
             Ok(_) => {}

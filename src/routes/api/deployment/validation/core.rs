@@ -23,11 +23,23 @@ pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::R
         }
     }
     let mut store = Store::new(&engine, ());
-    let instance = Instance::new(&mut store, &module, &[]).expect("failed to instantiate module");
-    let alloc = instance.get_typed_func::<u32, u32>(&mut store, "alloc").expect("failed to get alloc function from module");
+    let instance = match Instance::new(&mut store, &module, &[]) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("failed to instantiate module: {}", e);
+            return Err(anyhow::anyhow!("failed to instantiate module: {}", e));
+        }
+    };
+    let alloc = match instance.get_typed_func::<u32, u32>(&mut store, "alloc") {
+        Ok(a) => a,
+        Err(r) => {
+            eprintln!("{}", r);
+            return Err(anyhow::anyhow!("{}", r));
+        }
+    };
     let ptr = alloc.call(&mut store, 32);
     if ptr.is_err() {
-        let e = ptr.unwrap();
+        let e = ptr.unwrap_err();
         eprintln!("Error while testing module: {}", e);
         return Err(anyhow::anyhow!("{}", e));
     }

@@ -15,8 +15,8 @@ use tokio_tungstenite::tungstenite::http::header;
 use wasmtime::Engine;
 
 pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Sender<Job>, wasm_engine: Engine) {
-    let (headers_buf, leftover) = match read_headers(&mut stream).await {
-        Ok((headers, leftover)) => (headers, leftover),
+    let (headers_buf, leftover, headers_end) = match read_headers(&mut stream).await {
+        Ok((headers, leftover, hn)) => (headers, leftover, hn),
         Err(e) => {
             println!("Error reading headers: {}", e);
             let response = Response::json(StatusCode::BadRequest, vec![], Some(format!("{}", e)));
@@ -24,13 +24,10 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
             return;
         }
     };
-    let headers_end = find_headers_end(&headers_buf).unwrap();
+    
     let headers_str = String::from_utf8_lossy(&headers_buf).to_string();
-    println!("Headers parsed!");
     let body = if headers_str.contains("Transfer-Encoding: chunked") {
-        println!("Parsing chunked body");
         let result = read_body_chunked(&mut stream, &leftover).await;
-        println!("Matching result");
         match result {
             Ok(body) => body,
             Err(e) => {
@@ -48,31 +45,24 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
             return;
         }
         let len = len.unwrap();
-        println!("Parsing body of length {}", len);
         if len != 0 {
             let mut buffer: Vec<u8> = vec![0u8; len];
             buffer[..leftover.len()].copy_from_slice(&leftover);
-            println!("Extended buffer  {:?}", buffer);
             if leftover.len() < len {
                 let r = stream.read(&mut buffer[leftover.len()..]).await;
                 match r {
-                    Ok(r) => {
-                        println!("Read {} bytes", r);
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         println!("Error reading body: {:?}", e);
                         return;
                     }
                 }
             }
-            println!("Body is parsed!");
             buffer
         } else {
             return;
         }
-        
     };
-    println!("Body is parsed!");
     let header_string = String::from_utf8_lossy(&headers_buf).into_owned();
     let mut buffer: Vec<u8> = headers_buf.clone();
     buffer.extend_from_slice(&body);
@@ -133,7 +123,7 @@ pub async fn read_body_chunked(stream: &mut TcpStream, leftover: &[u8]) -> Resul
     }
 }
 
-pub async fn read_headers(stream: &mut TcpStream) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+pub async fn read_headers(stream: &mut TcpStream) -> anyhow::Result<(Vec<u8>, Vec<u8>, usize)> {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut temp = [0u8; 1024];
     loop {
@@ -144,10 +134,10 @@ pub async fn read_headers(stream: &mut TcpStream) -> anyhow::Result<(Vec<u8>, Ve
             Err(e) => return Err(e.into()),
         }
         if let Some(pos) = find_headers_end(&buf) {
-            return Ok((buf[..pos].to_vec(), buf[pos..].to_vec()));
+            return Ok((buf[..pos].to_vec(), buf[pos..].to_vec(), pos));
         }
         if buf.len() > 64 * 1024 {
-            return Err(anyhow::anyhow!("Request headers sections is too large"));
+            return Err(anyhow::anyhow!("Request headers section is too large"));
         }
     }
 }

@@ -6,7 +6,13 @@ use tokio::io::AsyncReadExt;
 
 pub async fn get_wasm_chunked<'a>(buffer: &'a [u8], string_buffer: &'a String, stream: &mut TcpStream) -> Result<Vec<u8>, ChunkReadingError> {
     let mut wasm_vec: Vec<u8> = Vec::new();
-    let body_idx = get_body_idx(&string_buffer).unwrap();
+    let body_idx = match get_body_idx(&string_buffer) {
+        Some(idx) => idx,
+        None => {
+            eprintln!("failed to find body index");
+            return Err(ChunkReadingError::ParseError(HttpParseError::InvalidHeader));
+        }
+    };
     let mut master_buffer: Vec<u8> = Vec::new();
     master_buffer.extend_from_slice(&buffer[body_idx..]);
     match read_chunks_from_buffer(&mut master_buffer, &mut wasm_vec).await {
@@ -95,7 +101,10 @@ pub async fn read_chunks_from_buffer(buffer: &mut Vec<u8>, wasm_vec: &mut Vec<u8
 
 //this should not return string, asshole!!!
 pub async fn get_wasm_code<'a>(buffer: &'a [u8], string_buffer: &'a String, stream: &mut TcpStream) -> Result<Vec<u8>, ChunkReadingError> {
-    let len = get_body_len(string_buffer).unwrap();
+    let len = match get_body_len(string_buffer) {
+        Some(len) => len,
+        None => return Err(ChunkReadingError::ParseError(HttpParseError::InvalidHeader)),
+    };
     let body_idx = string_buffer.find("\r\n\r\n");
     let mut wasm: Vec<u8> = Vec::new();
     let mut int_buffer = [0u8; 4096];

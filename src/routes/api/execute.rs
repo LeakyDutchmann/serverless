@@ -30,7 +30,6 @@ pub async fn execute(mut stream: TcpStream, buffer: &[u8], path: &str, tx: Sende
                 stream,
             };
             let _ = tx.send(job).await;
-            println!("Job sent!");
         }
         Err(e) => {
             println!("Failed to wrap input value {:?}", e);
@@ -48,9 +47,7 @@ pub fn get_input(buffer: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
         return Err(anyhow::anyhow!("No body length found"));
     }
     let len = len.unwrap();
-    println!("len {}", len);
     if let Some(body_idx) = get_body_idx(&string) {
-        println!("String: {}", String::from_utf8_lossy(buffer).as_ref());
         Ok(buffer[body_idx..body_idx + len].to_vec())
     } else {
         Err(anyhow::anyhow!("No body index found"))
