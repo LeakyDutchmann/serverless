@@ -74,76 +74,7 @@ impl Worker {
                                                     return;
                                                 }
                                             };
-                                            let module = match Module::new(&engine, wasm) {
-                                                Ok(module) => module,
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                    return;
-                                                }
-                                            };
-                                            let mut store = Store::new(&engine, ());
-                                            let instance = match Instance::new(&mut store, &module, &[]) {
-                                                Ok(instance) => instance,
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                    return;
-                                                }
-                                            };
-                                            let alloc = match instance.get_typed_func::<u32, u32>(&mut store, "alloc") {
-                                                Ok(alloc) => alloc,
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                    return;
-                                                }
-                                            };
-                                            let ptr = match alloc.call(&mut store, input.len() as u32) {
-                                                Ok(ptr) => ptr,
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                    return;
-                                                }
-                                            };
-                                            println!("Alloc returned pointer: {}", ptr);
-                                            let memory = match instance.get_memory(&mut store, "memory") {
-                                                Some(memory) => memory,
-                                                None => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: "No memory found in wasm module".to_string()}).await;
-                                                    return;
-                                                }
-                                            };
-                                            match memory.write(&mut store, ptr as usize, &input) {
-                                                Ok(_) => {}
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                    return;
-                                                }
-                                            }
-                                            println!("Memory written {:?}", &input);
-                                            let main = match instance.get_typed_func::<(u32, u32), (u32, u32)>(&mut store, "main") {
-                                                Ok(main) => main,
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                    return;
-                                                }
-                                            };
-                                            let result = main.call(&mut store, (ptr, input.len() as u32));
-                                            if result.is_err() {
-                                                let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: result.err().unwrap().to_string()}).await;
-                                                return;
-                                            }
-                                            let (new_ptr, len) = result.unwrap();
-                                            println!("Result of main: (ptr: {}, len: {})", new_ptr, len);
-                                            let mut buffer = vec![0u8; len as usize];
-                                            let func_result = memory.read(&mut store, new_ptr as usize, &mut buffer);
-                                            match func_result {
-                                                Ok(_) => {
-                                                    println!("Memory read successfully. Output: {:?}", buffer);
-                                                    let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result: buffer}).await;
-                                                }
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                }
-                                            }
+                                            run_wasm(&engine, &wasm, fb.clone(), &input, id, j_id).await;
                                         },
                                         Ok(None) => {
                                             let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: "MySql returned Ok(None)".to_string()}).await;
@@ -185,4 +116,95 @@ impl Worker {
         }
         
     }
+}
+
+pub async fn run_wasm(engine: &Engine, wasm: &[u8], fb: Sender<WorkerSignal>, input: &[u8], id: usize, j_id: usize) {
+    let mut store = Store::new(&engine, ());
+    let instance = match create_wasm_instance(&engine, &wasm, &mut store) {
+        Ok(instance) => instance,
+        Err(e) => {
+            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+            return;
+        }
+    };
+    let ptr = match get_alloc_ptr(instance, &mut store, &input) {
+        Ok(ptr) => ptr,
+        Err(e) => {
+            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+            return;
+        }
+    };
+    let memory = match instance.get_memory(&mut store, "memory") {
+        Some(memory) => memory,
+        None => {
+            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: "No memory found in wasm module".to_string()}).await;
+            return;
+        }
+    };
+    match memory.write(&mut store, ptr as usize, &input) {
+        Ok(_) => {}
+        Err(e) => {
+            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+            return;
+        }
+    }
+    println!("Memory written {:?}", &input);
+    let main = match instance.get_typed_func::<(u32, u32), (u32, u32)>(&mut store, "main") {
+        Ok(main) => main,
+        Err(e) => {
+            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+            return;
+        }
+    };
+    let result = main.call(&mut store, (ptr, input.len() as u32));
+    if result.is_err() {
+        let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: result.err().unwrap().to_string()}).await;
+        return;
+    }
+    let (new_ptr, len) = result.unwrap();
+    println!("Result of main: (ptr: {}, len: {})", new_ptr, len);
+    let mut buffer = vec![0u8; len as usize];
+    let func_result = memory.read(&mut store, new_ptr as usize, &mut buffer);
+    match func_result {
+        Ok(_) => {
+            println!("Memory read successfully. Output: {:?}", buffer);
+            let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result: buffer}).await;
+        }
+        Err(e) => {
+            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+        }
+    }
+}
+
+pub fn create_wasm_instance(engine: &Engine, wasm: &[u8], mut store: &mut Store<()>) -> anyhow::Result<Instance> {
+    let module = match Module::new(&engine, wasm) {
+        Ok(module) => module,
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to create wasm module: {}", e));
+        }
+    };
+    let instance = match Instance::new(&mut store, &module, &[]) {
+        Ok(instance) => instance,
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to create instance wasm module: {}", e));
+        }
+    };
+    Ok(instance)  
+}
+
+pub fn get_alloc_ptr(instance: Instance, mut store: &mut Store<()>, input: &[u8]) -> anyhow::Result<u32>{
+    let alloc = match instance.get_typed_func::<u32, u32>(&mut store, "alloc") {
+        Ok(alloc) => alloc,
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to get alloc function: {}", e));
+        }
+    };
+    let len = input.len() as u32;
+    let ptr = match alloc.call(&mut store, len) {
+        Ok(ptr) => ptr,
+        Err(e) => {
+            return Err(anyhow::anyhow!("Failed to get pointer: {}", e));
+        }
+    };
+    Ok(ptr)
 }
