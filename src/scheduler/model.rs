@@ -36,17 +36,20 @@ pub struct Scheduler {
     pub heartbeat_task: Option<JoinHandle<()>>,
     pub load_task: Option<JoinHandle<()>>,
     pub db_pool: MySqlPool,
+    pub load_map: Arc<RwLock<HashMap<usize, usize>>>,
 }
 
 static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
 impl Scheduler {
-    pub async fn intialize(worker_amount: usize, max_workers: usize, rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
+    pub async fn initialize(worker_amount: usize, max_workers: usize, rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
         let mut workers = Vec::new();
+        let mut load_map = HashMap::new();
         let (fb_tx, fb_rx) = channel::<WorkerSignal>(1024);
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
             let worker = Worker::spawn(i, pool, fb_tx.clone()).await;
+            load_map.insert(i, 0);
             workers.push(worker);
         }
         let scheduler = Scheduler {
@@ -60,6 +63,7 @@ impl Scheduler {
             scheduler_task: None,
             heartbeat_task: None,
             db_pool,
+            load_map: Arc::new(RwLock::new(load_map)),
         }; 
         scheduler
     }
@@ -73,7 +77,7 @@ impl Scheduler {
         let (load_tx, mut load_rx) = channel::<SchedulerCommand>(1024);
 
         let heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>> = Arc::new(RwLock::new(HashMap::new()));
-        let load_map: Arc<RwLock<HashMap<usize, usize>>> = Arc::new(RwLock::new(HashMap::new()));
+        let load_map = Arc::clone(&self.load_map);
         let job_map: Arc<RwLock<HashMap<usize, TcpStream>>> = Arc::new(RwLock::new(HashMap::new()));
         let l_map = Arc::clone(&load_map);
         let l_map_2 = Arc::clone(&l_map);
@@ -221,7 +225,7 @@ impl Scheduler {
                 interval.tick().await;
                 let heartbeat_map = h_map.read().await;
                 for (id, last_heartbeat) in heartbeat_map.iter() {
-                    if Instant::now().duration_since(*last_heartbeat) > Duration::from_secs(3) {
+                    if Instant::now().duration_since(*last_heartbeat) > Duration::from_secs(6) {
                         let _ = sender.send(SchedulerCommand::DropDeadWorker(*id)).await;
                     }
                 }
@@ -275,7 +279,7 @@ pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: 
     let mut workers = workers.write().await;
     let mut l_map = l_map.write().await;
     let last_id = workers.len();
-    for id in last_id + 1..last_id + amount {
+    for id in last_id + 1..=last_id + amount {
         let worker = Worker::spawn(id, db_pool.clone(), tx.clone()).await;
         workers.push(worker);
         l_map.insert(id, 0);
@@ -304,6 +308,7 @@ pub async fn drop_dead_worker(workers: Arc<RwLock<Vec<Worker>>>, to_remove: usiz
         workers[pos].jobs.read().await.iter().for_each(|j| j.abort());
         workers.remove(pos);
         l_map.remove(&to_remove);
+        println!("Dead worker {} dropped", to_remove);
     }
 }
 
