@@ -8,10 +8,10 @@ use wasmtime::Engine;
 
 #[tokio::main]
 async fn main() {
-    let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    let listener = TcpListener::bind("0.0.0.0:8080").await.expect("Failed to bind to port 8080");
     let (tx, rx) = tokio::sync::mpsc::channel::<Job>(1024);
     dotenvy::dotenv().ok();
-    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
     //using .expect() here to make sure program stops if connection failed.
     let db_pool = connect(&db_url, 10).await.expect("Failed to connect to a database, panicking!");
     
