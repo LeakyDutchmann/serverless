@@ -1,6 +1,6 @@
 use crate::scheduler::model::Job;
 use crate::http::response::{Response, StatusCode, send};
-use crate::http::utils::{get_body_idx, get_body_len};
+use crate::http::utils::{get_body_idx, get_body_len, get_input};
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
@@ -40,16 +40,3 @@ pub async fn execute(mut stream: TcpStream, buffer: &[u8], path: &str, tx: Sende
     
 }
 
-pub fn get_input(buffer: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
-    let string = String::from_utf8_lossy(buffer).to_string();
-    let len = get_body_len(&string);
-    if len.is_none() {
-        return Err(anyhow::anyhow!("No body length found"));
-    }
-    let len = len.unwrap();
-    if let Some(body_idx) = get_body_idx(&string) {
-        Ok(buffer[body_idx..body_idx + len].to_vec())
-    } else {
-        Err(anyhow::anyhow!("No body index found"))
-    }
-}

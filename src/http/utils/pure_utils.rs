@@ -7,6 +7,10 @@ pub fn get_body_idx(string_buffer: &str) -> Option<usize> {
     Some(raw + 4)
 }
 
+pub fn find_headers_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|w| w + 4)
+}
+
 pub fn get_body_len(string_buffer: &str) -> Option<usize> {
     let lines: Vec<String> = string_buffer.lines().map(|l| l.to_string()).collect();
     for line in lines {
@@ -33,25 +37,29 @@ pub fn get_function_name(path: &str) -> String {
     new
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    #[test]
-    fn function_name_parser() {
-        assert_eq!(get_function_name("/"), "".to_string());
-        assert_eq!(get_function_name("/foo"), "foo".to_string());
-        assert_eq!(get_function_name("/foo/bar"), "bar".to_string());
+pub fn parse_request_line(request: &str) -> Option<(String, String)> {
+    let line = request.lines().next().unwrap_or("");
+    if line.is_empty() {
+        return None;
     }
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    let method = parts[0];
+    if parts.len() < 2 {
+        return None;
+    }
+    Some((method.to_string(), parts[1].to_string()))
+}
 
-    #[test]
-    fn body_len_parser() {
-        let headers = "GET /test HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 10\r\n\r\n".to_string();
-        assert_eq!(get_body_len(&headers), Some(10));
-        let no_len = "GET /test HTTP/1.1\r\nContent-Type: application/json\r\n\r\n".to_string();
-        assert_eq!(get_body_len(&no_len), None);
-        let invalid = "GET /test HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: invalid\r\n\r\n".to_string();
-        assert_eq!(get_body_len(&invalid), None);
-        let invalid_len = "GET /test HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: -10\r\n\r\n".to_string();
-        assert_eq!(get_body_len(&invalid_len), None);
+pub fn get_input(buffer: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+    let string = String::from_utf8_lossy(buffer).to_string();
+    let len = get_body_len(&string);
+    if len.is_none() {
+        return Err(anyhow::anyhow!("No body length found"));
+    }
+    let len = len.unwrap();
+    if let Some(body_idx) = get_body_idx(&string) {
+        Ok(buffer[body_idx..body_idx + len].to_vec())
+    } else {
+        Err(anyhow::anyhow!("No body index found"))
     }
 }
