@@ -132,3 +132,33 @@ pub async fn get_wasm_code<'a>(buffer: &'a [u8], string_buffer: &'a String, stre
         Err(ChunkReadingError::ParseError(HttpParseError::MissingBodySeparator))
     }
 }
+
+
+#[cfg(test)]
+mod test {
+    use crate::routes::api::deployment::chunk_parser::models::ChunkParserError;
+
+use super::*;
+    #[tokio::test]
+    async fn chunk_reader() {
+        let mut input = (b"4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n").to_vec();
+        let mut output = Vec::new();
+        read_chunks_from_buffer(&mut input, &mut output).await;
+        let result = output.as_slice();
+        assert_eq!(result, b"Wikipedia");
+
+        let mut input_1 = (b"4\r\nWi").to_vec();
+        output.clear();
+        let result = read_chunks_from_buffer(&mut input_1, &mut output).await;
+        assert!(matches!(result, ChunkParserResult::NeedMoreData));
+
+        input = (b"ZZZ\r\nHello\r\n").to_vec();
+        output.clear();
+        let err = read_chunks_from_buffer(&mut input, &mut output).await;
+        assert!(matches!(err, ChunkParserResult::Error(ChunkParserError::InvalidChunkSize { .. })));
+
+        input = (b"4\r\nWikiX\n").to_vec();
+        let err = read_chunks_from_buffer(&mut input, &mut output).await;
+        assert!(matches!(err, ChunkParserResult::Error(ChunkParserError::MissingCRLF { .. })));
+    }
+}

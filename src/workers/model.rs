@@ -1,11 +1,11 @@
 use crate::http::utils::get_function_name;
 
 use tokio::task::JoinHandle;
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::channel;
 use sqlx::{MySqlPool, Row};
 use tokio::select;
-use tokio::time::{Interval, interval, Duration};
+use tokio::time::{interval, Duration};
 use tokio::sync::RwLock;
 use std::sync::Arc;
 use wasmtime::{Engine, Module, Store, Instance};

@@ -1,4 +1,3 @@
-use super::model::Route;
 use super::api::deployment::handler::deploy;
 use super::api::deployment::chunk_parser::{parser::read_chunks_from_buffer, models::{ChunkParserResult, ChunkReadingError}};
 use super::api::execute::execute;
@@ -9,13 +8,12 @@ use crate::scheduler::model::Job;
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use sqlx::MySqlPool;
-use tokio_tungstenite::tungstenite::http::header;
 use wasmtime::Engine;
 
 pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Sender<Job>, wasm_engine: Engine) {
-    let (headers_buf, leftover, headers_end) = match read_headers(&mut stream).await {
+    let (headers_buf, leftover, _headers_end) = match read_headers(&mut stream).await {
         Ok((headers, leftover, hn)) => (headers, leftover, hn),
         Err(e) => {
             println!("Error reading headers: {}", e);

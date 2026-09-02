@@ -3,10 +3,8 @@ use crate::http::response::{Response, StatusCode, send};
 
 use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};
 use sqlx::MySqlPool;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio::task::JoinHandle;
 use tokio::net::TcpStream;
-use tokio_stream::StreamExt;
 use tokio::select;
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
@@ -256,7 +254,6 @@ impl Scheduler {
                         println!("Sent downgrade command");  
                         continue
                     }
-                   ;
                 }
                 if busy_workes.len() as f64 >= map.len() as f64 * 0.75 {
                     if map.len() + 4 <= max_workers {
@@ -315,4 +312,16 @@ pub async fn drop_dead_worker(workers: Arc<RwLock<Vec<Worker>>>, to_remove: usiz
 pub async fn generate_job_id() -> usize {
     let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
     id
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    
+    #[tokio::test]
+    async fn id_gen() {
+        let id = generate_job_id().await;
+        assert!(id > 0);
+    }
 }

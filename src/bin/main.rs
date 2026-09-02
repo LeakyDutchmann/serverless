@@ -2,8 +2,7 @@ use serverless::routes::net::handle_connection;
 use serverless::database::connection::connect;
 use serverless::scheduler::model::{Scheduler, Job};
 
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::Sender;
+use tokio::net::TcpListener;
 use wasmtime::Engine;
 
 #[tokio::main]
