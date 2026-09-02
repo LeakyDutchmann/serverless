@@ -37,7 +37,15 @@ impl Worker {
         let jobs: Arc<RwLock<Vec<JoinHandle<()>>>> = Arc::new(RwLock::new(Vec::new()));
         let jobs_clone = Arc::clone(&jobs);
         let task = tokio::spawn(async move {
-            let engine = Engine::default();
+            let mut config = wasmtime::Config::new();
+            config.consume_fuel(true);
+            let engine = Engine::new(&config);
+            let engine = match engine {
+                Ok(engine) => engine,
+                Err(e) => {
+                    panic!("Failed to create engine: {}. FATAL: panicking!", e);
+                }
+            };
             loop {
                 let engine = engine.clone();
                 let db = db_pool.clone();
@@ -120,6 +128,13 @@ impl Worker {
 
 pub async fn run_wasm(engine: &Engine, wasm: &[u8], fb: Sender<WorkerSignal>, input: &[u8], id: usize, j_id: usize) {
     let mut store = Store::new(&engine, ());
+    match store.set_fuel(10_000) {
+        Ok(_) => {}
+        Err(e) => {
+            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+            return;
+        }
+    };
     let instance = match create_wasm_instance(&engine, &wasm, &mut store) {
         Ok(instance) => instance,
         Err(e) => {

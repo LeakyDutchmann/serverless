@@ -7,7 +7,6 @@ use sqlx::MySqlPool;
 use wasmtime::{Engine, Module};
 
 
-
 pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: MySqlPool, wasm_engine: Engine) {
     let function_name = get_function_name(path);
     let wasm = buffer.to_vec();
