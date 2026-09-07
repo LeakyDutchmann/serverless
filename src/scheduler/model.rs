@@ -6,6 +6,7 @@ use sqlx::MySqlPool;
 use tokio::task::JoinHandle;
 use tokio::net::TcpStream;
 use tokio::select;
+use wasmparser::TableType;
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::RwLock;
@@ -29,14 +30,14 @@ pub enum GCCSignal {
     EvictModule{path: String}
 }
 
-pub type BroadcastSender = tokio::sync::broadcast::Sender<GCCSignal>;
+pub type BcastSender<T> = tokio::sync::broadcast::Sender<T>;
 
 pub struct Scheduler {
     pub max_workers: usize,
     pub workers: Arc<RwLock<Vec<Worker>>>,
     pub rx: Option<Receiver<Job>>,
     pub load_rx: Option<Receiver<usize>>,
-    pub gcc_tx: Option<BroadcastSender>,
+    pub gcc_tx: Option<BcastSender<GCCSignal>>,
     pub telemetry_tx: Option<Sender<WorkerTelemetry>>,
     pub telemetry_rx: Option<Receiver<WorkerTelemetry>>,
     pub feedback_tx: Option<Sender<WorkerSignal>>,
@@ -376,7 +377,7 @@ impl Scheduler {
     }
 }
 
-pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BroadcastSender, l_map: Arc<RwLock<HashMap<usize, usize>>>) {
+pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BcastSender<GCCSignal>, l_map: Arc<RwLock<HashMap<usize, usize>>>) {
     let mut workers = workers.write().await;
     let mut l_map = l_map.write().await;
     let last_id = workers.len();

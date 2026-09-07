@@ -1,5 +1,6 @@
 use crate::http::utils::get_function_name;
-use crate::scheduler::model::{BroadcastSender, GCCSignal};
+use crate::scheduler::model::{BcastSender, GCCSignal};
+use super::cache_manager::start_cache_loop;
 
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::Sender;
@@ -41,7 +42,7 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BroadcastSender) -> Self {
+    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BcastSender<GCCSignal>) -> Self {
         let (tx, mut rx) = channel::<Message>(1024);
         let cache: Arc<RwLock<HashMap<String, Module>>> = Arc::new(RwLock::new(HashMap::new()));
         let cache_copy = Arc::clone(&cache);
@@ -62,58 +63,8 @@ impl Worker {
 
         let cache_db = db_pool.clone();
         let cache_engine = engine.clone();
-        let cache_manager = tokio::spawn(async move {
-            let cache = cache_copy;
-            let tl = tl_tx_copy.clone();
-            let mut rx = gcc_tx.subscribe();
-            while let Ok(signal) = rx.recv().await {
-                let mut map = cache.write().await;
-                match signal {
-                    GCCSignal::CacheModule { path } => {
-                        if map.contains_key(&path) {
-                            continue;
-                        }
-                        let func_name = get_function_name(&path);
-                        let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
-                            .bind(&func_name)
-                            .fetch_optional(&cache_db.clone())
-                            .await;
-                        match result {
-                            Ok(Some(row)) => {
-                                let wasm: Vec<u8> = match row.try_get("wasm") {
-                                    Ok(wasm) => wasm,
-                                    Err(e) => {
-                                        println!("Error getting wasm: {:?}", e);
-                                        return;
-                                    }
-                                };
-                                
-                                let module = match Module::new(&cache_engine, wasm) {
-                                    Ok(module) => module,
-                                    Err(e) => {
-                                        println!("Error creating wasm module: {:?}", e);
-                                        return;
-                                    }
-                                };
-                                let _ = map.insert(path.clone(), module);
-                                let _ = tl.send(WorkerTelemetry::ModuleCached { path: path.clone() });
-                                println!("Cached module: {}", path);
-                            },
-                            Ok(None) => {
-                                println!("Module not found: {}", path);
-                            }
-                            Err(e) => {
-                                println!("Failed to fetch module {}: {}",path, e);
-                            }
-                        };
-                    }
-                    GCCSignal::EvictModule { path } => {
-                        map.remove(&path);
-                        let _ = tl.send(WorkerTelemetry::ModuleEvicted { path: path });
-                    }
-                }
-            }
-        });
+        let cache_manager = start_cache_loop(cache_engine, cache_db, gcc_tx, tl_tx.clone(), Arc::clone(&cache)).await;
+        
         
         let task = tokio::spawn(async move {
             let engine = engine.clone();
