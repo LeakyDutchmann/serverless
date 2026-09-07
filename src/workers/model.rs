@@ -159,7 +159,7 @@ impl Worker {
                                                 return;
                                             }
                                         };
-                                        run_wasm(instance.clone(), &mut store, fb.clone(), &input, id, j_id).await;
+                                        run_wasm(instance, &mut store, fb.clone(), &input, id, j_id).await;
                                         let _ = tl.send(WorkerTelemetry::ModuleUsed{path}).await;
                                     } else {
                                         let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
