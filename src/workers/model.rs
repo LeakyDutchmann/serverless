@@ -1,14 +1,18 @@
 use crate::http::utils::get_function_name;
+use crate::scheduler::model::{BroadcastSender, GCCSignal};
 
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::channel;
 use sqlx::{MySqlPool, Row};
+use std::collections::HashMap;
 use tokio::select;
 use tokio::time::{interval, Duration};
 use tokio::sync::RwLock;
 use std::sync::Arc;
 use wasmtime::{Engine, Module, Store, Instance};
+
+
 
 pub enum Message {
     Stop(String),
@@ -22,6 +26,12 @@ pub enum WorkerSignal {
     Failed{w_id: usize, j_id: usize, reason: String},
 }
 
+pub enum WorkerTelemetry {
+    ModuleCached{path: String},
+    ModuleEvicted{path: String},
+    ModuleUsed{path: String},
+}
+
 pub struct Worker {
     pub main_loop: JoinHandle<()>,
     pub id: usize,
@@ -31,25 +41,87 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>) -> Self {
+    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BroadcastSender) -> Self {
         let (tx, mut rx) = channel::<Message>(1024);
+        let cache: Arc<RwLock<HashMap<String, Module>>> = Arc::new(RwLock::new(HashMap::new()));
+        let cache_copy = Arc::clone(&cache);
+        let tl_tx_copy = tl_tx.clone();
         let mut heartbeat = interval(Duration::from_secs(3));
         let jobs: Arc<RwLock<Vec<JoinHandle<()>>>> = Arc::new(RwLock::new(Vec::new()));
         let jobs_clone = Arc::clone(&jobs);
-        let task = tokio::spawn(async move {
-            let mut config = wasmtime::Config::new();
-            config.consume_fuel(true);
-            let engine = Engine::new(&config);
-            let engine = match engine {
-                Ok(engine) => engine,
-                Err(e) => {
-                    panic!("Failed to create engine: {}. FATAL: panicking!", e);
+
+        let mut config = wasmtime::Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config);
+        let engine = match engine {
+            Ok(engine) => engine,
+            Err(e) => {
+                panic!("Failed to create engine: {}. FATAL: panicking!", e);
+            }
+        };
+
+        let cache_db = db_pool.clone();
+        let cache_engine = engine.clone();
+        let cache_manager = tokio::spawn(async move {
+            let cache = cache_copy;
+            let tl = tl_tx_copy.clone();
+            let mut rx = gcc_tx.subscribe();
+            while let Ok(signal) = rx.recv().await {
+                let mut map = cache.write().await;
+                match signal {
+                    GCCSignal::CacheModule { path } => {
+                        if map.contains_key(&path) {
+                            continue;
+                        }
+                        let func_name = get_function_name(&path);
+                        let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
+                            .bind(&func_name)
+                            .fetch_optional(&cache_db.clone())
+                            .await;
+                        match result {
+                            Ok(Some(row)) => {
+                                let wasm: Vec<u8> = match row.try_get("wasm") {
+                                    Ok(wasm) => wasm,
+                                    Err(e) => {
+                                        println!("Error getting wasm: {:?}", e);
+                                        return;
+                                    }
+                                };
+                                
+                                let module = match Module::new(&cache_engine, wasm) {
+                                    Ok(module) => module,
+                                    Err(e) => {
+                                        println!("Error creating wasm module: {:?}", e);
+                                        return;
+                                    }
+                                };
+                                let _ = map.insert(path.clone(), module);
+                                let _ = tl.send(WorkerTelemetry::ModuleCached { path: path.clone() });
+                                println!("Cached module: {}", path);
+                            },
+                            Ok(None) => {
+                                println!("Module not found: {}", path);
+                            }
+                            Err(e) => {
+                                println!("Failed to fetch module {}: {}",path, e);
+                            }
+                        };
+                    }
+                    GCCSignal::EvictModule { path } => {
+                        map.remove(&path);
+                        let _ = tl.send(WorkerTelemetry::ModuleEvicted { path: path });
+                    }
                 }
-            };
+            }
+        });
+        
+        let task = tokio::spawn(async move {
+            let engine = engine.clone();
             loop {
                 let engine = engine.clone();
                 let db = db_pool.clone();
-                let fb= fb_tx.clone();
+                let fb = fb_tx.clone();
+                let tl = tl_tx.clone();
                 select! {
                     Some(msg) = rx.recv() => {
                         match msg {
@@ -65,32 +137,64 @@ impl Worker {
                                 break;
                             },
                             Message::Job{path, input, j_id} => {
+                                let cache_map = Arc::clone(&cache);
                                 let func_name = get_function_name(&path);
                                 let job = tokio::spawn(async move {
                                     let _ = fb.send(WorkerSignal::Working{w_id: id, j_id}).await;
-                                    println!("fetching func on path: {}", path);
-                                    let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
-                                        .bind(&func_name)
-                                        .fetch_optional(&db)
-                                        .await;
-                                    match result {
-                                        Ok(Some(row)) => {
-                                            let wasm: Vec<u8> = match row.try_get("wasm") {
-                                                Ok(wasm) => wasm,
-                                                Err(e) => {
-                                                    let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-                                                    return;
-                                                }
-                                            };
-                                            run_wasm(&engine, &wasm, fb.clone(), &input, id, j_id).await;
-                                        },
-                                        Ok(None) => {
-                                            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: "MySql returned Ok(None)".to_string()}).await;
-                                        }
+                                    let c_map = cache_map.read().await;
+
+                                    let mut store = Store::new(&engine, ());
+                                    match store.set_fuel(10_000) {
+                                        Ok(_) => {}
                                         Err(e) => {
                                             let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+                                            return;
                                         }
                                     };
+                                    if let Some(module) = c_map.get(&path) {
+                                        let instance = match Instance::new(&mut store, &module, &[]) {
+                                            Ok(instance) => instance,
+                                            Err(e) => {
+                                                println!("Failed to create instance wasm module: {}", e);
+                                                return;
+                                            }
+                                        };
+                                        run_wasm(instance.clone(), &mut store, fb.clone(), &input, id, j_id).await;
+                                        let _ = tl.send(WorkerTelemetry::ModuleUsed{path}).await;
+                                    } else {
+                                        let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
+                                            .bind(&func_name)
+                                            .fetch_optional(&db)
+                                            .await;
+                                        match result {
+                                            Ok(Some(row)) => {
+                                                let wasm: Vec<u8> = match row.try_get("wasm") {
+                                                    Ok(wasm) => wasm,
+                                                    Err(e) => {
+                                                        let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+                                                        return;
+                                                    }
+                                                };
+                                                //handle caching here my dear
+                                                
+                                                let instance = match create_wasm_instance(&engine, &wasm, &mut store) {
+                                                    Ok(instance) => instance,
+                                                    Err(e) => {
+                                                        let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+                                                        return;
+                                                    }
+                                                };
+                                                run_wasm(instance, &mut store, fb.clone(), &input, id, j_id).await;
+                                                let _ = tl.send(WorkerTelemetry::ModuleUsed{path}).await;
+                                            },
+                                            Ok(None) => {
+                                                let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: "MySql returned Ok(None)".to_string()}).await;
+                                            }
+                                            Err(e) => {
+                                                let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+                                            }
+                                        };
+                                    }
                                 });
                                 let mut jobs = jobs.write().await;
                                 jobs.push(job);       
@@ -126,22 +230,7 @@ impl Worker {
     }
 }
 
-pub async fn run_wasm(engine: &Engine, wasm: &[u8], fb: Sender<WorkerSignal>, input: &[u8], id: usize, j_id: usize) {
-    let mut store = Store::new(&engine, ());
-    match store.set_fuel(10_000) {
-        Ok(_) => {}
-        Err(e) => {
-            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-            return;
-        }
-    };
-    let instance = match create_wasm_instance(&engine, &wasm, &mut store) {
-        Ok(instance) => instance,
-        Err(e) => {
-            let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
-            return;
-        }
-    };
+pub async fn run_wasm(instance: Instance, mut store: &mut Store<()>, fb: Sender<WorkerSignal>, input: &[u8], id: usize, j_id: usize) {
     let ptr = match get_alloc_ptr(instance, &mut store, &input) {
         Ok(ptr) => ptr,
         Err(e) => {
@@ -163,7 +252,6 @@ pub async fn run_wasm(engine: &Engine, wasm: &[u8], fb: Sender<WorkerSignal>, in
             return;
         }
     }
-    println!("Memory written {:?}", &input);
     let main = match instance.get_typed_func::<(u32, u32), (u32, u32)>(&mut store, "main") {
         Ok(main) => main,
         Err(e) => {
@@ -177,12 +265,10 @@ pub async fn run_wasm(engine: &Engine, wasm: &[u8], fb: Sender<WorkerSignal>, in
         return;
     }
     let (new_ptr, len) = result.unwrap();
-    println!("Result of main: (ptr: {}, len: {})", new_ptr, len);
     let mut buffer = vec![0u8; len as usize];
     let func_result = memory.read(&mut store, new_ptr as usize, &mut buffer);
     match func_result {
         Ok(_) => {
-            println!("Memory read successfully. Output: {:?}", buffer);
             let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result: buffer}).await;
         }
         Err(e) => {

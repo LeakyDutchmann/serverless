@@ -33,7 +33,6 @@ pub fn get_body_len(string_buffer: &str) -> Option<usize> {
 
 pub fn get_function_name(path: &str) -> String {
     let new = path.split('/').last().unwrap_or("").to_string();
-    println!("path: {path}");
     new
 }
 

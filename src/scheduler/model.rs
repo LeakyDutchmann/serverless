@@ -1,4 +1,4 @@
-use crate::workers::model::{Worker, WorkerSignal, Message};
+use crate::workers::model::{Worker, WorkerSignal, Message, WorkerTelemetry};
 use crate::http::response::{Response, StatusCode, send};
 
 use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};
@@ -23,11 +23,22 @@ pub enum SchedulerCommand {
     DropDeadWorker(usize)
 }
 
+#[derive(Clone)]
+pub enum GCCSignal {
+    CacheModule{path: String},
+    EvictModule{path: String}
+}
+
+pub type BroadcastSender = tokio::sync::broadcast::Sender<GCCSignal>;
+
 pub struct Scheduler {
     pub max_workers: usize,
     pub workers: Arc<RwLock<Vec<Worker>>>,
     pub rx: Option<Receiver<Job>>,
     pub load_rx: Option<Receiver<usize>>,
+    pub gcc_tx: Option<BroadcastSender>,
+    pub telemetry_tx: Option<Sender<WorkerTelemetry>>,
+    pub telemetry_rx: Option<Receiver<WorkerTelemetry>>,
     pub feedback_tx: Option<Sender<WorkerSignal>>,
     pub feedback_rx: Option<Receiver<WorkerSignal>>,
     pub scheduler_task: Option<JoinHandle<()>>,
@@ -39,14 +50,24 @@ pub struct Scheduler {
 
 static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
+pub struct ModuleStats {
+    pub invokations: u64,
+    pub last_invocation: Instant,
+    pub pre_last_invocation: Option<Instant>,
+    pub last_eviction: Option<Instant>,
+    pub cached_instances: u64,
+}
+
 impl Scheduler {
     pub async fn initialize(worker_amount: usize, max_workers: usize, rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
         let mut workers = Vec::new();
         let mut load_map = HashMap::new();
         let (fb_tx, fb_rx) = channel::<WorkerSignal>(1024);
+        let (tl_tx, tl_rx) = channel::<WorkerTelemetry>(1024);
+        let (gcc_tx, _) = tokio::sync::broadcast::channel::<GCCSignal>(1024);
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
-            let worker = Worker::spawn(i, pool, fb_tx.clone()).await;
+            let worker = Worker::spawn(i, pool, fb_tx.clone(), tl_tx.clone(), gcc_tx.clone()).await;
             load_map.insert(i, 0);
             workers.push(worker);
         }
@@ -54,6 +75,9 @@ impl Scheduler {
             max_workers: max_workers,
             workers: Arc::new(RwLock::new(workers)),
             rx: Some(rx),
+            gcc_tx: Some(gcc_tx),
+            telemetry_tx: Some(tl_tx),
+            telemetry_rx: Some(tl_rx),
             feedback_tx: Some(fb_tx),
             feedback_rx: Some(fb_rx),
             load_rx: None,
@@ -69,7 +93,8 @@ impl Scheduler {
         if self.rx.is_none() || self.feedback_rx.is_none() {
             panic!("Main feedback and tasks receivers not found for scheduler, panicking!");
         }
-        let mut rx = self.rx.take().expect("Scheduler job receiver not found");
+        let mut rx = self.rx.take().expect("Scheduler job receiver not found. FATAL: panicking");
+        let mut tl_rx = self.telemetry_rx.take().expect("Scheduler telemetry sender not found. FATAL: panicking");
         let mut feedback_rx = self.feedback_rx.take().expect("Schedulet feedback receiver not found");
 
         let (load_tx, mut load_rx) = channel::<SchedulerCommand>(1024);
@@ -77,12 +102,17 @@ impl Scheduler {
         let heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>> = Arc::new(RwLock::new(HashMap::new()));
         let load_map = Arc::clone(&self.load_map);
         let job_map: Arc<RwLock<HashMap<usize, TcpStream>>> = Arc::new(RwLock::new(HashMap::new()));
+        let stats_map: Arc<RwLock<HashMap<String, ModuleStats>>> = Arc::new(RwLock::new(HashMap::new()));
+        let s_map = Arc::clone(&stats_map);
         let l_map = Arc::clone(&load_map);
         let l_map_2 = Arc::clone(&l_map);
         let h_map = Arc::clone(&heartbeat_map);
 
         let db_pool = self.db_pool.clone();
-        let feedback_tx = self.feedback_tx.clone().expect("Scheduler feedback sender not found");
+        let feedback_tx = self.feedback_tx.clone().expect("Scheduler feedback sender not found. FATAL: panicking");
+        let tl_tx = self.telemetry_tx.clone().expect("Scheduler telemetry sender not found. FATAL: panicking");
+        let gcc_tx = self.gcc_tx.clone().expect("Scheduler gcc sender not found. FATAL: panicking");
+        let cache_tx = gcc_tx.clone();
         let workers = Arc::clone(&self.workers);
         let workers_clone = Arc::clone(&self.workers);
         
@@ -196,12 +226,14 @@ impl Scheduler {
                     Some(cmd) = load_rx.recv() => {
                         let db_pool = db_pool.clone();
                         let feedback_tx = feedback_tx.clone();
+                        let tl_tx = tl_tx.clone();
                         let workers = workers.clone();
+                        let gcc_tx = gcc_tx.clone();
                         let l_map = l_map_2.clone();
                         match cmd {
                             SchedulerCommand::Upgrade(n) => {
                                 tokio::spawn(async move {
-                                    upgrade(workers.clone(), n, db_pool.clone(), feedback_tx.clone(), l_map.clone()).await;
+                                    upgrade(workers.clone(), n, db_pool.clone(), feedback_tx.clone(), tl_tx.clone(), gcc_tx.clone(), l_map.clone()).await;
                                 });
                             }
                             SchedulerCommand::Downgrade(n) => {
@@ -212,9 +244,81 @@ impl Scheduler {
                             }
                         }
                     }
+                    Some(tl_signal) = tl_rx.recv() => {
+                        let s_map = Arc::clone(&stats_map);
+                        tokio::spawn(async move {
+                            let mut map = s_map.write().await;
+                            let instant = Instant::now();
+                            match tl_signal {
+                                WorkerTelemetry::ModuleCached{path} => {
+                                    if let Some(stats) = map.get_mut(&path) {
+                                        stats.cached_instances += 1;
+                                    } else {
+                                        map.insert(path.clone(), ModuleStats {
+                                            invokations: 1,
+                                            last_invocation: instant,
+                                            pre_last_invocation: None,
+                                            last_eviction: None,
+                                            cached_instances: 1,
+                                        });
+                                    }
+                                },
+                                WorkerTelemetry::ModuleEvicted{path} => {
+                                    if let Some(stats) = map.get_mut(&path) {
+                                        stats.last_eviction = Some(instant);
+                                        stats.cached_instances -= 1;
+                                    }
+                                },
+                                WorkerTelemetry::ModuleUsed{path} => {
+                                    if let Some(stats) = map.get_mut(&path) {
+                                        stats.invokations += 1;
+                                        stats.pre_last_invocation = Some(stats.last_invocation);
+                                        stats.last_invocation = instant;
+                                    } else {
+                                        map.insert(path.clone(), ModuleStats {
+                                            invokations: 1,
+                                            last_invocation: instant,
+                                            pre_last_invocation: None,
+                                            last_eviction: Some(instant),
+                                            cached_instances: 0,
+                                        });
+                                    }
+                                },
+                            }
+                        });
+                        
+                    }
                 }
             }
         });
+        let gcc_loop = tokio::spawn(async move {
+            let mut interval = interval(Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                let mut map = s_map.read().await; 
+                for (path, stats) in map.iter() {
+                    if let Some(pre_last) = stats.pre_last_invocation {
+                        if stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60) {
+                            if Instant::now().duration_since(stats.last_invocation) < Duration::from_secs(60) {
+                                println!("Sending signal to cache module on path: {}", path);
+                                cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
+                                //cache!
+                            }
+                        }
+                        // unfinished 
+                    } else {
+                        //this one was called only once, so we don't give a little damn
+                    }
+                    if Instant::now().duration_since(stats.last_invocation) > Duration::from_secs(900) {
+                        println!("Sending signal to evict module on path: {}", path);
+                        cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
+                        //evict! probably remove from hashmap huh?
+                    }
+                }
+            }
+            
+        });
+        
         let hb_tx = load_tx.clone();
         let heartbeat_loop = tokio::spawn(async move {
             let mut interval = interval(Duration::from_secs(3));
@@ -272,12 +376,12 @@ impl Scheduler {
     }
 }
 
-pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, l_map: Arc<RwLock<HashMap<usize, usize>>>) {
+pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BroadcastSender, l_map: Arc<RwLock<HashMap<usize, usize>>>) {
     let mut workers = workers.write().await;
     let mut l_map = l_map.write().await;
     let last_id = workers.len();
     for id in last_id + 1..=last_id + amount {
-        let worker = Worker::spawn(id, db_pool.clone(), tx.clone()).await;
+        let worker = Worker::spawn(id, db_pool.clone(), tx.clone(), tl_tx.clone(), gcc_tx.clone()).await;
         workers.push(worker);
         l_map.insert(id, 0);
     }
