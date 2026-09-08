@@ -14,7 +14,24 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
     tokio::spawn(async move {
         let engine = wasm_engine;
         // println!("{:02x?}", &wasm[..16]);
-        let module = Module::new(&engine, &wasm).expect("Failed to create wasm module from wasm code");
+        let module = match Module::new(&engine, &wasm) {
+            Ok(module) => {module},
+            Err(e) => {
+                let response = Response::json(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}, {}", &path, e)));
+                send(&mut stream, &response).await;
+                return;
+            }
+        };
+        let memory_usage = match module.serialize() {
+            Ok(v) => {
+                v.len()
+            }
+            Err(e) => {
+                let response = Response::json(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}, {}", &path, e)));
+                send(&mut stream, &response).await;
+                return;
+            }
+        };
         match validate_wasm_module(&engine, &module).await {
             Ok(_) => {}
             Err(e) => {
@@ -24,9 +41,10 @@ pub async fn deploy(mut stream: TcpStream, buffer: &[u8], path: &str, db_pool: M
                 return;
             }
         }
-        let result = sqlx::query("INSERT INTO functions(path, wasm) value(?, ?)")
+        let result = sqlx::query("INSERT INTO functions(path, wasm, memory_usage) value(?, ?, ?)")
             .bind(&function_name)
             .bind(&wasm)
+            .bind(memory_usage as i32)
             .execute(&db_pool)
             .await;
         match result {

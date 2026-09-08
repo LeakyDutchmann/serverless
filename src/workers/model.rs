@@ -1,7 +1,7 @@
 use crate::http::utils::get_function_name;
 use crate::scheduler::model::{BcastSender, GCCSignal};
 use super::cache_manager::start_cache_loop;
-use super::main_loop::start_main_loop;
+use super::main_loop::init::start_main_loop;
 
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::Sender;
@@ -28,10 +28,19 @@ pub enum WorkerSignal {
     Failed{w_id: usize, j_id: usize, reason: String},
 }
 
-pub enum WorkerTelemetry {
+pub enum CacherTelemetry {
     ModuleCached{path: String},
     ModuleEvicted{path: String},
     ModuleUsed{path: String},
+    FailedToCache{path: String, error: CacheErr}
+}
+
+#[derive(Debug)]
+pub enum CacheErr {
+    SerializationError{reason: String},
+    ModuleCreationError{reason: String},
+    IoError{reason: String},
+    NotFound,
 }
 
 pub struct Worker {
@@ -43,7 +52,7 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BcastSender<GCCSignal>) -> Self {
+    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>) -> Self {
         let (tx, mut rx) = channel::<Message>(1024);
         let cache: Arc<RwLock<HashMap<String, Module>>> = Arc::new(RwLock::new(HashMap::new()));
         let cache_copy = Arc::clone(&cache);
@@ -63,7 +72,7 @@ impl Worker {
 
         let cache_db = db_pool.clone();
         let cache_engine = engine.clone();
-        let cache_manager = start_cache_loop(
+        let cache_loop = start_cache_loop(
             cache_engine,
             cache_db,
             gcc_tx,
@@ -87,8 +96,7 @@ impl Worker {
             sender: tx,
             load: 0,
             jobs: jobs_clone,
-        }
-        
+        }     
     }
 }
 

@@ -1,13 +1,13 @@
-use crate::workers::model::{Worker, WorkerSignal, Message, WorkerTelemetry};
+use crate::workers::model::{Worker, WorkerSignal, Message, CacherTelemetry, CacheErr};
 use crate::http::response::{Response, StatusCode, send};
 
 use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};
-use sqlx::MySqlPool;
+use sqlx::{MySqlPool, Row};
 use tokio::task::JoinHandle;
 use tokio::net::TcpStream;
 use tokio::select;
 use wasmparser::TableType;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
@@ -38,8 +38,8 @@ pub struct Scheduler {
     pub rx: Option<Receiver<Job>>,
     pub load_rx: Option<Receiver<usize>>,
     pub gcc_tx: Option<BcastSender<GCCSignal>>,
-    pub telemetry_tx: Option<Sender<WorkerTelemetry>>,
-    pub telemetry_rx: Option<Receiver<WorkerTelemetry>>,
+    pub telemetry_tx: Option<Sender<CacherTelemetry>>,
+    pub telemetry_rx: Option<Receiver<CacherTelemetry>>,
     pub feedback_tx: Option<Sender<WorkerSignal>>,
     pub feedback_rx: Option<Receiver<WorkerSignal>>,
     pub scheduler_task: Option<JoinHandle<()>>,
@@ -52,6 +52,7 @@ pub struct Scheduler {
 static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
 pub struct ModuleStats {
+    pub memory_usage: Option<usize>,
     pub invokations: u64,
     pub last_invocation: Instant,
     pub pre_last_invocation: Option<Instant>,
@@ -64,7 +65,7 @@ impl Scheduler {
         let mut workers = Vec::new();
         let mut load_map = HashMap::new();
         let (fb_tx, fb_rx) = channel::<WorkerSignal>(1024);
-        let (tl_tx, tl_rx) = channel::<WorkerTelemetry>(1024);
+        let (tl_tx, tl_rx) = channel::<CacherTelemetry>(1024);
         let (gcc_tx, _) = tokio::sync::broadcast::channel::<GCCSignal>(1024);
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
@@ -108,7 +109,8 @@ impl Scheduler {
         let l_map = Arc::clone(&load_map);
         let l_map_2 = Arc::clone(&l_map);
         let h_map = Arc::clone(&heartbeat_map);
-
+        let forbidden_paths: Arc<RwLock<HashSet<String>>> = Arc::new(RwLock::new(HashSet::new()));
+        let f_paths = Arc::clone(&forbidden_paths);
         let db_pool = self.db_pool.clone();
         let feedback_tx = self.feedback_tx.clone().expect("Scheduler feedback sender not found. FATAL: panicking");
         let tl_tx = self.telemetry_tx.clone().expect("Scheduler telemetry sender not found. FATAL: panicking");
@@ -116,6 +118,8 @@ impl Scheduler {
         let cache_tx = gcc_tx.clone();
         let workers = Arc::clone(&self.workers);
         let workers_clone = Arc::clone(&self.workers);
+
+        let cache_memory_usage: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         
         let main_loop = tokio::spawn(async move {
             loop {
@@ -247,30 +251,77 @@ impl Scheduler {
                     }
                     Some(tl_signal) = tl_rx.recv() => {
                         let s_map = Arc::clone(&stats_map);
+                        let f_paths = Arc::clone(&forbidden_paths);
+                        let db_pool = db_pool.clone();
+                        let m_counter = Arc::clone(&cache_memory_usage);
                         tokio::spawn(async move {
                             let mut map = s_map.write().await;
+                            let mut f_map = f_paths.write().await;
                             let instant = Instant::now();
                             match tl_signal {
-                                WorkerTelemetry::ModuleCached{path} => {
+                                CacherTelemetry::ModuleCached{path} => {
                                     if let Some(stats) = map.get_mut(&path) {
                                         stats.cached_instances += 1;
                                     } else {
-                                        map.insert(path.clone(), ModuleStats {
-                                            invokations: 1,
-                                            last_invocation: instant,
-                                            pre_last_invocation: None,
-                                            last_eviction: None,
-                                            cached_instances: 1,
-                                        });
+                                        let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
+                                            .bind(path.clone())
+                                            .fetch_optional(&db_pool)
+                                            .await;
+                                        match result {
+                                            Ok(Some(row)) => {
+                                                let memory_usage: i32 = match row.try_get("memory_usage") {
+                                                    Ok(memory_usage) => memory_usage,
+                                                    Err(e) => {
+                                                        //DO SOMETHIN! 
+                                                        return;
+                                                    },
+                                                }; 
+                                                if memory_usage < 0 {
+                                                    //DO SOMETHING
+                                                    return;
+                                                }
+                                                map.insert(path.clone(), ModuleStats {
+                                                    invokations: 1,
+                                                    last_invocation: instant,
+                                                    pre_last_invocation: None,
+                                                    last_eviction: None,
+                                                    cached_instances: 1,
+                                                    memory_usage: Some(memory_usage as usize),
+                                                });
+                                                m_counter.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                                            }
+                                            Ok(None) => {
+                                                //DO SOMETHING
+                                            }
+                                            Err(e) => {
+                                                //DO SOMETHING
+                                            }
+                                        }      
                                     }
                                 },
-                                WorkerTelemetry::ModuleEvicted{path} => {
+                                CacherTelemetry::ModuleEvicted{path} => {
                                     if let Some(stats) = map.get_mut(&path) {
                                         stats.last_eviction = Some(instant);
                                         stats.cached_instances -= 1;
+                                        match stats.memory_usage {
+                                            Some(memory_usage) => {
+                                                let current = m_counter.load(std::sync::atomic::Ordering::SeqCst);
+                                                if memory_usage < current {
+                                                    m_counter.fetch_sub(memory_usage, std::sync::atomic::Ordering::SeqCst);
+                                                } else {
+                                                    panic!("Memory usage counter went inconsistent");
+                                                    //Little note on this one: I don't think that part should stay this way, but I will handle it
+                                                    // more gracefully later. One thing to remember is that this is FATAL error, no fall back - you have to shutdown
+                                                    // server immediately!
+                                                }
+                                            },
+                                            None => {
+                                                println!("Error ocured here: memory_usage of evicted module is None. path: {}", path);
+                                            }
+                                        };
                                     }
                                 },
-                                WorkerTelemetry::ModuleUsed{path} => {
+                                CacherTelemetry::ModuleUsed{path} => {
                                     if let Some(stats) = map.get_mut(&path) {
                                         stats.invokations += 1;
                                         stats.pre_last_invocation = Some(stats.last_invocation);
@@ -282,7 +333,19 @@ impl Scheduler {
                                             pre_last_invocation: None,
                                             last_eviction: Some(instant),
                                             cached_instances: 0,
+                                            memory_usage: None,
                                         });
+                                    }
+                                },
+                                CacherTelemetry::FailedToCache{path, error} => {    
+                                    println!("Failed to cache module {}, error: {:?}", path, error);
+                                    match error {
+                                        CacheErr::SerializationError{reason} => {
+                                            println!("Added {} to forbidden paths due to serialization error: {}", path, reason);
+                                            f_map.insert(path);
+                                            
+                                        },
+                                        _ => {}
                                     }
                                 },
                             }
@@ -297,7 +360,11 @@ impl Scheduler {
             loop {
                 interval.tick().await;
                 let mut map = s_map.read().await; 
+                let mut f_map = f_paths.read().await;
                 for (path, stats) in map.iter() {
+                    if f_map.contains(path) {
+                        continue;
+                    }
                     if let Some(pre_last) = stats.pre_last_invocation {
                         if stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60) {
                             if Instant::now().duration_since(stats.last_invocation) < Duration::from_secs(60) {
@@ -310,7 +377,7 @@ impl Scheduler {
                     } else {
                         //this one was called only once, so we don't give a little damn
                     }
-                    if Instant::now().duration_since(stats.last_invocation) > Duration::from_secs(900) {
+                    if Instant::now().duration_since(stats.last_invocation) > Duration::from_secs(120) {
                         println!("Sending signal to evict module on path: {}", path);
                         cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
                         //evict! probably remove from hashmap huh?
@@ -377,7 +444,7 @@ impl Scheduler {
     }
 }
 
-pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, tl_tx: Sender<WorkerTelemetry>, gcc_tx: BcastSender<GCCSignal>, l_map: Arc<RwLock<HashMap<usize, usize>>>) {
+pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>, l_map: Arc<RwLock<HashMap<usize, usize>>>) {
     let mut workers = workers.write().await;
     let mut l_map = l_map.write().await;
     let last_id = workers.len();

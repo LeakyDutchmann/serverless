@@ -17,4 +17,4 @@ tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1.19"
 tokio-tungstenite = "0.30.0"
 wasmparser = "0.256.0"
-wasmtime = "47.0.3"
+wasmtime = { version = "47.0.3", features = ["cranelift"] }
