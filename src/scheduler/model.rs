@@ -11,6 +11,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
+use std::collections::BinaryHeap;
+use std::cmp::Reverse;
+use ordered_float::OrderedFloat;
+
 
 pub struct Job {
     pub path: String,
@@ -52,13 +56,28 @@ pub struct Scheduler {
 static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
 pub struct ModuleStats {
-    pub memory_usage: Option<usize>,
+    pub memory_usage: usize,
     pub invokations: u64,
+    pub first_invocation: Instant,
     pub last_invocation: Instant,
     pub pre_last_invocation: Option<Instant>,
     pub last_eviction: Option<Instant>,
     pub cached_instances: u64,
 }
+
+pub struct CacheQueueEntry {
+    pub first_attempt: Instant,
+    pub last_attempt: Instant,
+    pub attempts: usize,
+}
+
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
+pub struct TotalMemoryUsage {
+    pub memory_usage: usize,
+}
+
+const MAX_MEMORY_USAGE: usize = 512_000_000;
+const MAX_STATS_ENTRIES: usize = 50_000;
 
 impl Scheduler {
     pub async fn initialize(worker_amount: usize, max_workers: usize, rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
@@ -118,8 +137,11 @@ impl Scheduler {
         let cache_tx = gcc_tx.clone();
         let workers = Arc::clone(&self.workers);
         let workers_clone = Arc::clone(&self.workers);
+        let workers_cloned = Arc::clone(&self.workers);
 
         let cache_memory_usage: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let cache_memory_usage_clone = Arc::clone(&cache_memory_usage);
+    
         
         let main_loop = tokio::spawn(async move {
             loop {
@@ -251,6 +273,7 @@ impl Scheduler {
                     }
                     Some(tl_signal) = tl_rx.recv() => {
                         let s_map = Arc::clone(&stats_map);
+                        //provide here boundaries checking, huh? [[[[[[[[[[[[[[just me being extremely funny]]]]]]]]]]]]]]
                         let f_paths = Arc::clone(&forbidden_paths);
                         let db_pool = db_pool.clone();
                         let m_counter = Arc::clone(&cache_memory_usage);
@@ -281,12 +304,13 @@ impl Scheduler {
                                                     return;
                                                 }
                                                 map.insert(path.clone(), ModuleStats {
+                                                    first_invocation: instant,
                                                     invokations: 1,
                                                     last_invocation: instant,
                                                     pre_last_invocation: None,
                                                     last_eviction: None,
                                                     cached_instances: 1,
-                                                    memory_usage: Some(memory_usage as usize),
+                                                    memory_usage: memory_usage as usize,
                                                 });
                                                 m_counter.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
                                             }
@@ -303,22 +327,15 @@ impl Scheduler {
                                     if let Some(stats) = map.get_mut(&path) {
                                         stats.last_eviction = Some(instant);
                                         stats.cached_instances -= 1;
-                                        match stats.memory_usage {
-                                            Some(memory_usage) => {
-                                                let current = m_counter.load(std::sync::atomic::Ordering::SeqCst);
-                                                if memory_usage < current {
-                                                    m_counter.fetch_sub(memory_usage, std::sync::atomic::Ordering::SeqCst);
-                                                } else {
-                                                    panic!("Memory usage counter went inconsistent");
-                                                    //Little note on this one: I don't think that part should stay this way, but I will handle it
-                                                    // more gracefully later. One thing to remember is that this is FATAL error, no fall back - you have to shutdown
-                                                    // server immediately!
-                                                }
-                                            },
-                                            None => {
-                                                println!("Error ocured here: memory_usage of evicted module is None. path: {}", path);
-                                            }
-                                        };
+                                        let current = m_counter.load(std::sync::atomic::Ordering::SeqCst);
+                                        if stats.memory_usage < current {
+                                            m_counter.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::SeqCst);
+                                        } else {
+                                            panic!("Memory usage counter went inconsistent");
+                                            //Little note on this one: I don't think that part should stay this way, but I will handle it
+                                            // more gracefully later. One thing to remember is that this is FATAL error, no fall back - you have to shutdown
+                                            // server immediately!
+                                        }
                                     }
                                 },
                                 CacherTelemetry::ModuleUsed{path} => {
@@ -327,18 +344,47 @@ impl Scheduler {
                                         stats.pre_last_invocation = Some(stats.last_invocation);
                                         stats.last_invocation = instant;
                                     } else {
-                                        map.insert(path.clone(), ModuleStats {
-                                            invokations: 1,
-                                            last_invocation: instant,
-                                            pre_last_invocation: None,
-                                            last_eviction: Some(instant),
-                                            cached_instances: 0,
-                                            memory_usage: None,
-                                        });
+                                        let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
+                                            .bind(path.clone())
+                                            .fetch_optional(&db_pool)
+                                            .await;
+                                        match result {
+                                            Ok(Some(row)) => {
+                                                let memory_usage: i32 = match row.try_get("memory_usage") {
+                                                    Ok(memory_usage) => memory_usage,
+                                                    Err(e) => {
+                                                        //DO SOMETHIN! 
+                                                        return;
+                                                    },
+                                                }; 
+                                                if memory_usage < 0 {
+                                                    //DO SOMETHING
+                                                    return;
+                                                }
+                                                map.insert(path.clone(), ModuleStats {
+                                                    invokations: 1,
+                                                    first_invocation: instant,
+                                                    last_invocation: instant,
+                                                    pre_last_invocation: None,
+                                                    last_eviction: None,
+                                                    cached_instances: 0,
+                                                    memory_usage: memory_usage as usize,
+                                                });
+                                                m_counter.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                                            }
+                                            Ok(None) => {
+                                                //DO SOMETHING
+                                            }
+                                            Err(e) => {
+                                                //DO SOMETHING
+                                            }
+                                        }  
                                     }
                                 },
                                 CacherTelemetry::FailedToCache{path, error} => {    
                                     println!("Failed to cache module {}, error: {:?}", path, error);
+                                    //this is a bit off. No one sends this serializations error, so you have to make 
+                                    // all it more statistic like, oki?
                                     match error {
                                         CacheErr::SerializationError{reason} => {
                                             println!("Added {} to forbidden paths due to serialization error: {}", path, reason);
@@ -356,7 +402,14 @@ impl Scheduler {
             }
         });
         let gcc_loop = tokio::spawn(async move {
+            let m_counter = cache_memory_usage_clone.load(Ordering::SeqCst);
+            let w_counter = workers_cloned.read().await.len();
             let mut interval = interval(Duration::from_secs(10));
+
+            //Hell yeah, binary heap is quite a solution! And probably should be somehow bounded.
+            let mut evict_candidates: BinaryHeap<Reverse<(String, OrderedFloat<f64>, TotalMemoryUsage)>> = BinaryHeap::new();
+            //this hashmap has to be bounded as well as ModuleStats hashmap, but you have to make it right, no rushing.
+            let mut cache_queue: HashMap<String, CacheQueueEntry> = HashMap::new();
             loop {
                 interval.tick().await;
                 let mut map = s_map.read().await; 
@@ -369,8 +422,46 @@ impl Scheduler {
                         if stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60) {
                             if Instant::now().duration_since(stats.last_invocation) < Duration::from_secs(60) {
                                 println!("Sending signal to cache module on path: {}", path);
-                                cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
-                                //cache!
+                                //Should I also check if MAX_MEMORY_USAGE >= m_counter ?
+                                if (stats.memory_usage * w_counter + m_counter) < MAX_MEMORY_USAGE {
+                                    let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
+                                    cache_queue.remove(path);
+                                } else {
+                                    if let Some(entry) = cache_queue.get_mut(path) {
+                                        if entry.attempts >= 3 {
+                                            if entry.last_attempt - entry.first_attempt > Duration::from_secs(180) {
+                                                let duration = Instant::now() - entry.first_attempt;
+                                                let dynamic = entry.attempts as f64 / duration.as_secs() as f64;
+                                                let memory_needed = stats.memory_usage * w_counter;
+                                                //snippet
+                                                loop {
+                                                    if let Some(Reverse((e_path, rate, total_memory_usage))) = evict_candidates.pop() {
+                                                        if rate > OrderedFloat::from(dynamic) {
+                                                            continue;
+                                                        }
+                                                        if total_memory_usage.memory_usage <= memory_needed {
+                                                            let _ = cache_tx.send(GCCSignal::EvictModule{path: e_path});
+                                                            let _ = cache_tx.send(GCCSignal::CacheModule{path: path.to_string()});
+                                                            break;
+                                                        } else {
+                                                            let _ = cache_tx.send(GCCSignal::EvictModule{path: e_path});
+                                                        }
+                                                    }
+                                                }
+                                            } 
+                                        } else {
+                                            entry.last_attempt = Instant::now();
+                                            entry.attempts += 1;
+                                        }               
+                                    } else {
+                                        cache_queue.insert(path.clone(), CacheQueueEntry {
+                                            first_attempt: Instant::now(),
+                                            last_attempt: Instant::now(),
+                                            attempts: 1,
+                                        });
+                                    }
+                                }
+                            
                             }
                         }
                         // unfinished 
@@ -379,12 +470,22 @@ impl Scheduler {
                     }
                     if Instant::now().duration_since(stats.last_invocation) > Duration::from_secs(120) {
                         println!("Sending signal to evict module on path: {}", path);
-                        cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
+                        let _ = cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
+                        cache_queue.remove(path);
                         //evict! probably remove from hashmap huh?
+                    }
+
+                    //here decide if that module could be candidate for eviction!!
+                    if stats.cached_instances > 0 {
+                        let cache_time = Instant::now() - stats.first_invocation;
+                        let use_dynamic = stats.invokations as f64 / cache_time.as_secs() as f64;
+                        if use_dynamic < 0.05 {
+                            evict_candidates.push(Reverse((path.clone(), OrderedFloat::from(use_dynamic), TotalMemoryUsage { memory_usage: stats.memory_usage })));
+                        }
+                        //here decide if it is worth keeping cached.
                     }
                 }
             }
-            
         });
         
         let hb_tx = load_tx.clone();
