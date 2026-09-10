@@ -402,8 +402,7 @@ impl Scheduler {
             }
         });
         let gcc_loop = tokio::spawn(async move {
-            let m_counter = cache_memory_usage_clone.load(Ordering::SeqCst);
-            let w_counter = workers_cloned.read().await.len();
+            
             let mut interval = interval(Duration::from_secs(10));
 
             //Hell yeah, binary heap is quite a solution! And probably should be somehow bounded.
@@ -411,6 +410,8 @@ impl Scheduler {
             //this hashmap has to be bounded as well as ModuleStats hashmap, but you have to make it right, no rushing.
             let mut cache_queue: HashMap<String, CacheQueueEntry> = HashMap::new();
             loop {
+                let m_counter = cache_memory_usage_clone.load(Ordering::SeqCst);
+                let w_counter = workers_cloned.read().await.len();
                 interval.tick().await;
                 let mut map = s_map.read().await; 
                 let mut f_map = f_paths.read().await;
@@ -430,8 +431,8 @@ impl Scheduler {
                                     if let Some(entry) = cache_queue.get_mut(path) {
                                         if entry.attempts >= 3 {
                                             if entry.last_attempt - entry.first_attempt > Duration::from_secs(180) {
-                                                let duration = Instant::now() - entry.first_attempt;
-                                                let dynamic = entry.attempts as f64 / duration.as_secs() as f64;
+                                                let use_duration = Instant::now() - stats.first_invocation;
+                                                let dynamic = stats.invokations as f64 / use_duration.as_secs() as f64;
                                                 let memory_needed = stats.memory_usage * w_counter;
                                                 //snippet
                                                 loop {
@@ -446,6 +447,9 @@ impl Scheduler {
                                                         } else {
                                                             let _ = cache_tx.send(GCCSignal::EvictModule{path: e_path});
                                                         }
+                                                    } else {
+                                                        println!("There is no module to evict right now. Sorry for ya bro");
+                                                        break;
                                                     }
                                                 }
                                             } 
@@ -477,8 +481,8 @@ impl Scheduler {
 
                     //here decide if that module could be candidate for eviction!!
                     if stats.cached_instances > 0 {
-                        let cache_time = Instant::now() - stats.first_invocation;
-                        let use_dynamic = stats.invokations as f64 / cache_time.as_secs() as f64;
+                        let use_time = Instant::now() - stats.first_invocation;
+                        let use_dynamic = stats.invokations as f64 / use_time.as_secs() as f64;
                         if use_dynamic < 0.05 {
                             evict_candidates.push(Reverse((path.clone(), OrderedFloat::from(use_dynamic), TotalMemoryUsage { memory_usage: stats.memory_usage })));
                         }
@@ -591,7 +595,6 @@ pub async fn generate_job_id() -> usize {
 #[cfg(test)]
 mod test {
     use super::*;
-    
     #[tokio::test]
     async fn id_gen() {
         let id = generate_job_id().await;
