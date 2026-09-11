@@ -295,12 +295,12 @@ impl Scheduler {
                                                 let memory_usage: i32 = match row.try_get("memory_usage") {
                                                     Ok(memory_usage) => memory_usage,
                                                     Err(e) => {
-                                                        //DO SOMETHIN! 
+                                                        println!("CACHING: Failed to fetch memory usage for module: {}, error: {}", path, e);
                                                         return;
                                                     },
                                                 }; 
                                                 if memory_usage < 0 {
-                                                    //DO SOMETHING
+                                                    println!("CACHING: Module on path {} requires negative amount of memory: {}", path, memory_usage);
                                                     return;
                                                 }
                                                 map.insert(path.clone(), ModuleStats {
@@ -315,10 +315,10 @@ impl Scheduler {
                                                 m_counter.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
                                             }
                                             Ok(None) => {
-                                                //DO SOMETHING
+                                                println!("CACHING: Failed to look up module at path: {}, MODULE NOT FOUND", path);
                                             }
                                             Err(e) => {
-                                                //DO SOMETHING
+                                                println!("CACHING: Failed to look up module at path: {}, {}", path, e);
                                             }
                                         }      
                                     }
@@ -353,12 +353,12 @@ impl Scheduler {
                                                 let memory_usage: i32 = match row.try_get("memory_usage") {
                                                     Ok(memory_usage) => memory_usage,
                                                     Err(e) => {
-                                                        //DO SOMETHIN! 
+                                                        println!("CACHINGSTATS: Failed to fetch memory usage for module: {}, error: {}", path, e);
                                                         return;
                                                     },
                                                 }; 
                                                 if memory_usage < 0 {
-                                                    //DO SOMETHING
+                                                    println!("CACHINGSTATS: Module on path {} requires negative amount of memory: {}", path, memory_usage);
                                                     return;
                                                 }
                                                 map.insert(path.clone(), ModuleStats {
@@ -373,26 +373,17 @@ impl Scheduler {
                                                 m_counter.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
                                             }
                                             Ok(None) => {
-                                                //DO SOMETHING
+                                                println!("CACHINGSTATS: Failed to look up module at path: {}, MODULE NOT FOUND", path);
                                             }
                                             Err(e) => {
-                                                //DO SOMETHING
+                                                 println!("CACHINGSTATS: Failed to look up module at path: {}, {}", path, e);
                                             }
                                         }  
                                     }
                                 },
                                 CacherTelemetry::FailedToCache{path, error} => {    
                                     println!("Failed to cache module {}, error: {:?}", path, error);
-                                    //this is a bit off. No one sends this serializations error, so you have to make 
-                                    // all it more statistic like, oki?
-                                    match error {
-                                        CacheErr::SerializationError{reason} => {
-                                            println!("Added {} to forbidden paths due to serialization error: {}", path, reason);
-                                            f_map.insert(path);
-                                            
-                                        },
-                                        _ => {}
-                                    }
+                                    //probably need to build some logic aroung it.
                                 },
                             }
                         });
