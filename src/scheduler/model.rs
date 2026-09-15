@@ -12,6 +12,7 @@ use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::RwLock;
 use tokio::time::Duration;
 use std::collections::BinaryHeap;
+use priority_queue::PriorityQueue;
 use std::cmp::Reverse;
 use ordered_float::OrderedFloat;
 
@@ -71,9 +72,10 @@ pub struct CacheQueueEntry {
     pub attempts: usize,
 }
 
-#[derive(Ord, PartialOrd, Eq, PartialEq)]
-pub struct TotalMemoryUsage {
-    pub memory_usage: usize,
+#[derive(Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct ModuleEvictionStats {
+    pub path: String,
+    pub total_memory_usage: usize,
 }
 
 const MAX_MEMORY_USAGE: usize = 512_000_000;
@@ -393,19 +395,14 @@ impl Scheduler {
             }
         });
         let gcc_loop = tokio::spawn(async move {
-            
             let mut interval = interval(Duration::from_secs(10));
-
-            //Hell yeah, binary heap is quite a solution! And probably should be somehow bounded.
-            let mut evict_candidates: BinaryHeap<Reverse<(String, OrderedFloat<f64>, TotalMemoryUsage)>> = BinaryHeap::new();
-            //this hashmap has to be bounded as well as ModuleStats hashmap, but you have to make it right, no rushing.
-            let mut cache_queue: HashMap<String, CacheQueueEntry> = HashMap::new();
-            loop {
+            let mut evict_candidates: PriorityQueue<ModuleEvictionStats, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
+            loop { 
                 let m_counter = cache_memory_usage_clone.load(Ordering::SeqCst);
                 let w_counter = workers_cloned.read().await.len();
                 interval.tick().await;
-                let mut map = s_map.read().await; 
-                let mut f_map = f_paths.read().await;
+                let map = s_map.read().await; 
+                let f_map = f_paths.read().await;
                 for (path, stats) in map.iter() {
                     if f_map.contains(path) {
                         continue;
@@ -413,73 +410,58 @@ impl Scheduler {
                     if let Some(pre_last) = stats.pre_last_invocation {
                         if stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60) {
                             if Instant::now().duration_since(stats.last_invocation) < Duration::from_secs(60) {
-                                println!("Sending signal to cache module on path: {}", path);
-                                //Should I also check if MAX_MEMORY_USAGE >= m_counter ?
-                                if (stats.memory_usage * w_counter + m_counter) < MAX_MEMORY_USAGE {
+                                let memory_needed = stats.memory_usage * w_counter + m_counter;
+                                if  memory_needed < MAX_MEMORY_USAGE {
+                                    println!("Sending signal to cache module on path: {}", path);
                                     let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
-                                    cache_queue.remove(path);
                                 } else {
-                                    if let Some(entry) = cache_queue.get_mut(path) {
-                                        if entry.attempts >= 3 {
-                                            if entry.last_attempt - entry.first_attempt > Duration::from_secs(180) {
-                                                let use_duration = Instant::now() - stats.first_invocation;
-                                                let dynamic = stats.invokations as f64 / use_duration.as_secs() as f64;
-                                                let memory_needed = stats.memory_usage * w_counter;
-                                                //snippet
-                                                loop {
-                                                    if let Some(Reverse((e_path, rate, total_memory_usage))) = evict_candidates.pop() {
-                                                        if rate > OrderedFloat::from(dynamic) {
-                                                            continue;
-                                                        }
-                                                        if total_memory_usage.memory_usage <= memory_needed {
-                                                            let _ = cache_tx.send(GCCSignal::EvictModule{path: e_path});
-                                                            let _ = cache_tx.send(GCCSignal::CacheModule{path: path.to_string()});
-                                                            break;
-                                                        } else {
-                                                            let _ = cache_tx.send(GCCSignal::EvictModule{path: e_path});
-                                                        }
-                                                    } else {
-                                                        println!("There is no module to evict right now. Sorry for ya bro");
-                                                        break;
-                                                    }
+                                    println!("Not enough memory to cache module on path: {}", path);
+                                    let mut memory_freed = 0;
+                                    let use_time = Instant::now() - stats.first_invocation;
+                                    let use_dynamic = stats.invokations as f64 / use_time.as_secs() as f64;
+                                    loop {
+                                        if memory_freed >= memory_needed {
+                                            println!("Memory freed: {} >= memory needed: {}", memory_freed, memory_needed);
+                                            println!("Sending signal to cache module on path: {}", path);
+                                            let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
+                                            break;
+                                        }
+                                        if let Some((e_stats, Reverse(OrderedFloat(e_use_dynamic)))) = evict_candidates.peek() {
+                                            if memory_needed <= e_stats.total_memory_usage {
+                                                if e_use_dynamic < &use_dynamic {
+                                                    let _ = cache_tx.send(GCCSignal::EvictModule{path: e_stats.path.clone()});
+                                                    memory_freed += e_stats.total_memory_usage;
+                                                    let _ = evict_candidates.pop();
                                                 }
-                                            } 
+                                            }
                                         } else {
-                                            entry.last_attempt = Instant::now();
-                                            entry.attempts += 1;
-                                        }               
-                                    } else {
-                                        cache_queue.insert(path.clone(), CacheQueueEntry {
-                                            first_attempt: Instant::now(),
-                                            last_attempt: Instant::now(),
-                                            attempts: 1,
-                                        });
+                                            break;
+                                        }
                                     }
+                                    
                                 }
                             
                             }
                         }
-                        // unfinished 
-                    } else {
-                        //this one was called only once, so we don't give a little damn
                     }
                     if Instant::now().duration_since(stats.last_invocation) > Duration::from_secs(120) {
                         println!("Sending signal to evict module on path: {}", path);
                         let _ = cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
-                        cache_queue.remove(path);
-                        //evict! probably remove from hashmap huh?
                     }
-
-                    //here decide if that module could be candidate for eviction!!
                     if stats.cached_instances > 0 {
                         let use_time = Instant::now() - stats.first_invocation;
                         let use_dynamic = stats.invokations as f64 / use_time.as_secs() as f64;
+                        let total_memory_usage = stats.memory_usage * stats.cached_instances as usize;
                         if use_dynamic < 0.05 {
-                            evict_candidates.push(Reverse((path.clone(), OrderedFloat::from(use_dynamic), TotalMemoryUsage { memory_usage: stats.memory_usage })));
+                            //Length threshold 10000 might be customized
+                            if evict_candidates.len() < 10000 {
+                                evict_candidates.push(ModuleEvictionStats{path: path.clone(), total_memory_usage }, Reverse(OrderedFloat::from(use_dynamic)));
+                            } 
+                            
                         }
-                        //here decide if it is worth keeping cached.
                     }
                 }
+                evict_candidates.clear();
             }
         });
         
