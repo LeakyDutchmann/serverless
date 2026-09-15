@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokio::select;
 use tokio::time::{interval, Duration};
 
-use crate::scheduler::model::{GCCSignal, BcastSender};
+use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
 use crate::http::utils::get_function_name;
 use crate::workers::model::{CacherTelemetry, CacheErr};
 

@@ -3,6 +3,8 @@ use crate::http::response::{Response, StatusCode, send};
 
 use super::loops::load_loop::model::start_load_loop;
 use super::loops::hb_loop::model::start_hb_loop;
+use super::loops::gcc_loop::model::{start_gcc_loop, GCCSignal, BcastSender};
+use super::loops::main_loop::model::start_main_loop;
 
 use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};
 use sqlx::{MySqlPool, Row};
@@ -32,13 +34,6 @@ pub enum SchedulerCommand {
     DropDeadWorker(usize)
 }
 
-#[derive(Clone)]
-pub enum GCCSignal {
-    CacheModule{path: String},
-    EvictModule{path: String}
-}
-
-pub type BcastSender<T> = tokio::sync::broadcast::Sender<T>;
 
 pub struct Scheduler {
     pub max_workers: usize,
@@ -69,19 +64,6 @@ pub struct ModuleStats {
     pub cached_instances: u64,
 }
 
-pub struct CacheQueueEntry {
-    pub first_attempt: Instant,
-    pub last_attempt: Instant,
-    pub attempts: usize,
-}
-
-#[derive(Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub struct ModuleEvictionStats {
-    pub path: String,
-    pub total_memory_usage: usize,
-}
-
-const MAX_MEMORY_USAGE: usize = 512_000_000;
 const MAX_STATS_ENTRIES: usize = 50_000;
 
 impl Scheduler {
@@ -119,7 +101,7 @@ impl Scheduler {
         if self.rx.is_none() || self.feedback_rx.is_none() {
             panic!("Main feedback and tasks receivers not found for scheduler, panicking!");
         }
-        let mut rx = self.rx.take().expect("Scheduler job receiver not found. FATAL: panicking");
+        let mut job_rx = self.rx.take().expect("Scheduler job receiver not found. FATAL: panicking");
         let mut tl_rx = self.telemetry_rx.take().expect("Scheduler telemetry sender not found. FATAL: panicking");
         let mut feedback_rx = self.feedback_rx.take().expect("Schedulet feedback receiver not found");
 
@@ -148,325 +130,25 @@ impl Scheduler {
         let cache_memory_usage_clone = Arc::clone(&cache_memory_usage);
     
         
-        let main_loop = tokio::spawn(async move {
-            loop {
-                select! {
-                    Some(worker_signal) = feedback_rx.recv() => {
-                        let mut load_map = load_map.write().await;
-                        let mut job_map = job_map.write().await;
-                        match worker_signal {
-                            WorkerSignal::HeartBeat { w_id } => {
-                                let mut map = heartbeat_map.write().await;
-                                map.insert(w_id, Instant::now());
-                            }
-                            WorkerSignal::Working {w_id, j_id} => {   
-                                if let Some(load) = load_map.get_mut(&w_id) {
-                                    *load += 1;
-                                    println!("Worker {} started task {}", w_id, j_id);
-                                } else {
-                                    load_map.insert(w_id, 1);
-                                }
-                            }
-                            WorkerSignal::Finished {w_id, j_id, result} => {
-                                if let Some(stream) = job_map.get_mut(&j_id) {
-                                    if let Some(load) = load_map.get_mut(&w_id) {
-                                        if *load != 0 {
-                                            *load -= 1;
-                                            println!("Worker {} finished task {}", w_id, j_id);
-                                            let response = Response::json(StatusCode::Ok, result, None);
-                                            send(stream, &response).await;
-                                        } else {
-                                            let response = Response::json(StatusCode::Ok, result, None);
-                                            send(stream, &response).await;
-                                            println!("Worker {} finished untracked task", w_id);
-                                        }      
-                                    } else {
-                                        let response = Response::json(StatusCode::Ok, result, None);
-                                        send(stream, &response).await;
-                                        println!("Worker {} finished untracked task", w_id);
-                                    }  
-                                    job_map.remove(&j_id);
-                                } else {
-                                    println!("Worker {} finished task that belongs to no client. Task id: {}", w_id, j_id);
-                                }     
-                            }
-                            WorkerSignal::Failed {w_id, j_id, reason} => {
-                                if let Some(stream) = job_map.get_mut(&j_id) {
-                                    if let Some(load) = load_map.get_mut(&w_id) {
-                                        if *load != 0 {
-                                            *load -= 1;
-                                            let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
-                                            send(stream, &response).await;
-                                            println!("Worker {} failed task {}", w_id, j_id);
-                                        } else {
-                                            let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
-                                            send(stream, &response).await;
-                                            println!("Worker {} failed untracked task", w_id);
-                                        }      
-                                    } else {
-                                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
-                                        send(stream, &response).await;
-                                        println!("Worker {} failed untracked task", w_id);
-                                    }
-                                    job_map.remove(&j_id);
-                                } else {
-                                    println!("Worker {} failed task that belongs to no client. Task id: {}, reason {}", w_id, j_id, reason);
-                                }   
-                            }
-                        }
-                    }
-                    Some(mut task) = rx.recv() => {
-                        println!("Got request to run this function: {:?}", task.path);
-                        let workers = workers_clone.clone();
-                        let l_map = l_map_2.clone();
-                        let j_map = job_map.clone();
-                        tokio::spawn(async move {
-                            let workers = workers.read().await;
-                            let map = l_map.read().await;
-                            if let Some((id, _)) = map.iter().min_by_key(|(_, v)| *v) {
-                                if let Some(worker) = workers.iter().find(|w| w.id == *id) {
-                                    let j_id = generate_job_id().await;
-                                    let result = worker.sender.send(Message::Job{path: task.path, input: task.input, j_id}).await;
-                                    match result {
-                                        Ok(_) => {
-                                            let mut map = j_map.write().await;
-                                            map.insert(j_id, task.stream);
-                                        }
-                                        Err(e) => {
-                                            let line = format!("Failed to send job to worker {}", e);
-                                            let response = Response::json(StatusCode::IntServerError, vec![], Some(line));
-                                            send(&mut task.stream, &response).await;
-                                            println!("Failed to send job to worker: {}", e)
-                                        },
-                                    }
-                                } else {
-                                    let vec = workers.iter().map(|w| w.id.clone()).collect::<Vec<_>>();
-                                    let s = vec.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ");
-                                    let line = format!("Failed to attach task to a worker because of inconsistent worker id's");
-                                    let response = Response::json(StatusCode::IntServerError, vec![], Some(line));
-                                    send(&mut task.stream, &response).await;
-                                    println!("Tried to attach job to worker with id {}, but there is no such worker in worker pool. Workers available: {}", id, s);
-                                }
-                            } else {
-                                let line = format!("Failed to attach task to a worker because there are no workers");
-                                let response = Response::json(StatusCode::IntServerError, vec![], Some(line));
-                                send(&mut task.stream, &response).await;
-                                println!("Couldn't pick a worker, because load map contains exactly 0 elements");
-                            }
-                        });
-                    }
-                    Some(cmd) = load_rx.recv() => {
-                        let db_pool = db_pool.clone();
-                        let feedback_tx = feedback_tx.clone();
-                        let tl_tx = tl_tx.clone();
-                        let workers = workers.clone();
-                        let gcc_tx = gcc_tx.clone();
-                        let l_map = l_map_2.clone();
-                        match cmd {
-                            SchedulerCommand::Upgrade(n) => {
-                                tokio::spawn(async move {
-                                    upgrade(workers.clone(), n, db_pool.clone(), feedback_tx.clone(), tl_tx.clone(), gcc_tx.clone(), l_map.clone()).await;
-                                });
-                            }
-                            SchedulerCommand::Downgrade(n) => {
-                                downgrade(workers.clone(), n, l_map.clone()).await;
-                            }
-                            SchedulerCommand::DropDeadWorker(n) => {
-                                drop_dead_worker(workers.clone(), n, l_map.clone()).await;
-                            }
-                        }
-                    }
-                    Some(tl_signal) = tl_rx.recv() => {
-                        let s_map = Arc::clone(&stats_map);
-                        //provide here boundaries checking, huh? [[[[[[[[[[[[[[just me being extremely funny]]]]]]]]]]]]]]
-                        let f_paths = Arc::clone(&forbidden_paths);
-                        let db_pool = db_pool.clone();
-                        let m_counter = Arc::clone(&cache_memory_usage);
-                        tokio::spawn(async move {
-                            let mut map = s_map.write().await;
-                            let mut f_map = f_paths.write().await;
-                            let instant = Instant::now();
-                            match tl_signal {
-                                CacherTelemetry::ModuleCached{path} => {
-                                    if let Some(stats) = map.get_mut(&path) {
-                                        stats.cached_instances += 1;
-                                    } else {
-                                        let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
-                                            .bind(path.clone())
-                                            .fetch_optional(&db_pool)
-                                            .await;
-                                        match result {
-                                            Ok(Some(row)) => {
-                                                let memory_usage: i32 = match row.try_get("memory_usage") {
-                                                    Ok(memory_usage) => memory_usage,
-                                                    Err(e) => {
-                                                        println!("CACHING: Failed to fetch memory usage for module: {}, error: {}", path, e);
-                                                        return;
-                                                    },
-                                                }; 
-                                                if memory_usage < 0 {
-                                                    println!("CACHING: Module on path {} requires negative amount of memory: {}", path, memory_usage);
-                                                    return;
-                                                }
-                                                map.insert(path.clone(), ModuleStats {
-                                                    first_invocation: instant,
-                                                    invokations: 1,
-                                                    last_invocation: instant,
-                                                    pre_last_invocation: None,
-                                                    last_eviction: None,
-                                                    cached_instances: 1,
-                                                    memory_usage: memory_usage as usize,
-                                                });
-                                                m_counter.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
-                                            }
-                                            Ok(None) => {
-                                                println!("CACHING: Failed to look up module at path: {}, MODULE NOT FOUND", path);
-                                            }
-                                            Err(e) => {
-                                                println!("CACHING: Failed to look up module at path: {}, {}", path, e);
-                                            }
-                                        }      
-                                    }
-                                },
-                                CacherTelemetry::ModuleEvicted{path} => {
-                                    if let Some(stats) = map.get_mut(&path) {
-                                        stats.last_eviction = Some(instant);
-                                        stats.cached_instances -= 1;
-                                        let current = m_counter.load(std::sync::atomic::Ordering::SeqCst);
-                                        if stats.memory_usage < current {
-                                            m_counter.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::SeqCst);
-                                        } else {
-                                            panic!("Memory usage counter went inconsistent");
-                                            //Little note on this one: I don't think that part should stay this way, but I will handle it
-                                            // more gracefully later. One thing to remember is that this is FATAL error, no fall back - you have to shutdown
-                                            // server immediately!
-                                        }
-                                    }
-                                },
-                                CacherTelemetry::ModuleUsed{path} => {
-                                    if let Some(stats) = map.get_mut(&path) {
-                                        stats.invokations += 1;
-                                        stats.pre_last_invocation = Some(stats.last_invocation);
-                                        stats.last_invocation = instant;
-                                    } else {
-                                        let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
-                                            .bind(path.clone())
-                                            .fetch_optional(&db_pool)
-                                            .await;
-                                        match result {
-                                            Ok(Some(row)) => {
-                                                let memory_usage: i32 = match row.try_get("memory_usage") {
-                                                    Ok(memory_usage) => memory_usage,
-                                                    Err(e) => {
-                                                        println!("CACHINGSTATS: Failed to fetch memory usage for module: {}, error: {}", path, e);
-                                                        return;
-                                                    },
-                                                }; 
-                                                if memory_usage < 0 {
-                                                    println!("CACHINGSTATS: Module on path {} requires negative amount of memory: {}", path, memory_usage);
-                                                    return;
-                                                }
-                                                map.insert(path.clone(), ModuleStats {
-                                                    invokations: 1,
-                                                    first_invocation: instant,
-                                                    last_invocation: instant,
-                                                    pre_last_invocation: None,
-                                                    last_eviction: None,
-                                                    cached_instances: 0,
-                                                    memory_usage: memory_usage as usize,
-                                                });
-                                                m_counter.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
-                                            }
-                                            Ok(None) => {
-                                                println!("CACHINGSTATS: Failed to look up module at path: {}, MODULE NOT FOUND", path);
-                                            }
-                                            Err(e) => {
-                                                 println!("CACHINGSTATS: Failed to look up module at path: {}, {}", path, e);
-                                            }
-                                        }  
-                                    }
-                                },
-                                CacherTelemetry::FailedToCache{path, error} => {    
-                                    println!("Failed to cache module {}, error: {:?}", path, error);
-                                    //probably need to build some logic aroung it.
-                                },
-                            }
-                        });
-                        
-                    }
-                }
-            }
-        });
-        let gcc_loop = tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(10));
-            let mut evict_candidates: PriorityQueue<ModuleEvictionStats, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
-            loop { 
-                let m_counter = cache_memory_usage_clone.load(Ordering::SeqCst);
-                let w_counter = workers_cloned.read().await.len();
-                interval.tick().await;
-                let map = s_map.read().await; 
-                let f_map = f_paths.read().await;
-                for (path, stats) in map.iter() {
-                    if f_map.contains(path) {
-                        continue;
-                    }
-                    if let Some(pre_last) = stats.pre_last_invocation {
-                        if stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60) {
-                            if Instant::now().duration_since(stats.last_invocation) < Duration::from_secs(60) {
-                                let memory_needed = stats.memory_usage * w_counter + m_counter;
-                                if  memory_needed < MAX_MEMORY_USAGE {
-                                    println!("Sending signal to cache module on path: {}", path);
-                                    let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
-                                } else {
-                                    println!("Not enough memory to cache module on path: {}", path);
-                                    let mut memory_freed = 0;
-                                    let use_time = Instant::now() - stats.first_invocation;
-                                    let use_dynamic = stats.invokations as f64 / use_time.as_secs() as f64;
-                                    loop {
-                                        if memory_freed >= memory_needed {
-                                            println!("Memory freed: {} >= memory needed: {}", memory_freed, memory_needed);
-                                            println!("Sending signal to cache module on path: {}", path);
-                                            let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
-                                            break;
-                                        }
-                                        if let Some((e_stats, Reverse(OrderedFloat(e_use_dynamic)))) = evict_candidates.peek() {
-                                            if memory_needed <= e_stats.total_memory_usage {
-                                                if e_use_dynamic < &use_dynamic {
-                                                    let _ = cache_tx.send(GCCSignal::EvictModule{path: e_stats.path.clone()});
-                                                    memory_freed += e_stats.total_memory_usage;
-                                                    let _ = evict_candidates.pop();
-                                                }
-                                            }
-                                        } else {
-                                            break;
-                                        }
-                                    }
-                                    
-                                }
-                            
-                            }
-                        }
-                    }
-                    if Instant::now().duration_since(stats.last_invocation) > Duration::from_secs(120) {
-                        println!("Sending signal to evict module on path: {}", path);
-                        let _ = cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
-                    }
-                    if stats.cached_instances > 0 {
-                        let use_time = Instant::now() - stats.first_invocation;
-                        let use_dynamic = stats.invokations as f64 / use_time.as_secs() as f64;
-                        let total_memory_usage = stats.memory_usage * stats.cached_instances as usize;
-                        if use_dynamic < 0.05 {
-                            //Length threshold 10000 might be customized
-                            if evict_candidates.len() < 10000 {
-                                evict_candidates.push(ModuleEvictionStats{path: path.clone(), total_memory_usage }, Reverse(OrderedFloat::from(use_dynamic)));
-                            } 
-                            
-                        }
-                    }
-                }
-                evict_candidates.clear();
-            }
-        });
+        let main_loop = start_main_loop(
+            feedback_rx,
+            load_map,
+            job_map,
+            heartbeat_map,
+            job_rx,
+            workers_clone,
+            l_map_2,
+            load_rx,
+            db_pool,
+            feedback_tx,
+            tl_tx,
+            tl_rx,
+            gcc_tx,
+            forbidden_paths,
+            cache_memory_usage,
+            stats_map,
+        ).await;
+        let gcc_loop = start_gcc_loop(workers_cloned, s_map, f_paths, cache_memory_usage_clone, cache_tx).await;
         
         let hb_tx = load_tx.clone();
         let heartbeat_loop = start_hb_loop(hb_tx, h_map).await;

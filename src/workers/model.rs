@@ -1,5 +1,5 @@
 use crate::http::utils::get_function_name;
-use crate::scheduler::model::{BcastSender, GCCSignal};
+use crate::scheduler::loops::gcc_loop::model::{BcastSender, GCCSignal};
 use super::cache_manager::start_cache_loop;
 use super::main_loop::init::start_main_loop;
 
