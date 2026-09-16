@@ -6,7 +6,6 @@ use tokio::{sync::mpsc::{Receiver, Sender}, time::Instant};
 use tokio::task::JoinHandle;
 use tokio::net::TcpStream;
 
-
 pub struct Job {
     pub path: String,
     pub input: Vec<u8>,
@@ -71,13 +70,13 @@ impl InternalChannels {
 
 pub struct Channel<T> {
     pub tx: Sender<T>,
-    pub rx: Option<Receiver<T>>,
+    pub rx: Receiver<T>,
 }
 
 impl<T> Channel<T> {
     fn new(buffer_size: usize) -> Channel<T> {
         let (tx, rx) = tokio::sync::mpsc::channel::<T>(buffer_size);
-        Channel { tx, rx: Some(rx) }
+        Channel { tx, rx}
     }
 }
 

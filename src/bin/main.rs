@@ -1,6 +1,6 @@
 use serverless::routes::net::handle_connection;
 use serverless::database::connection::connect;
-use serverless::scheduler::model::{Scheduler, Job};
+use serverless::scheduler::{model::Scheduler, types::Job};
 
 use tokio::net::TcpListener;
 use wasmtime::Engine;

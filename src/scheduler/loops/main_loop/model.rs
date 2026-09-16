@@ -4,6 +4,10 @@ use crate::scheduler::types::{Job, ModuleStats, InternalChannels, Channel};
 
 use crate::scheduler::{types::SchedulerCommand, utils::{upgrade, downgrade, drop_dead_worker, generate_job_id}};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
+use super::feedback::handle_feedback;
+use super::job::handle_job;
+use super::load::handle_load;
+
 
 use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};
 use sqlx::{MySqlPool, Row};
@@ -21,8 +25,7 @@ use std::cmp::Reverse;
 use ordered_float::OrderedFloat;
 
 
-pub async fn start_main_loop
-(
+pub async fn start_main_loop(
     load_map: Arc<RwLock<HashMap<usize, usize>>>,
     job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
@@ -30,7 +33,7 @@ pub async fn start_main_loop
     workers: Arc<RwLock<Vec<Worker>>>,
     mut load_rx: Receiver<SchedulerCommand>,
     db_pool: MySqlPool,
-    internal_channels: InternalChannels,
+    mut internal_channels: InternalChannels,
     gcc_tx: BcastSender<GCCSignal>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
@@ -39,132 +42,17 @@ pub async fn start_main_loop
     let handle = tokio::spawn(async move {
         loop {
             select! {
-                Some(worker_signal) = feedback_rx.recv() => {
-                    let mut load_map = load_map.write().await;
-                    let mut job_map = job_map.write().await;
-                    match worker_signal {
-                        WorkerSignal::HeartBeat { w_id } => {
-                            let mut map = heartbeat_map.write().await;
-                            map.insert(w_id, Instant::now());
-                        }
-                        WorkerSignal::Working {w_id, j_id} => {   
-                            if let Some(load) = load_map.get_mut(&w_id) {
-                                *load += 1;
-                                println!("Worker {} started task {}", w_id, j_id);
-                            } else {
-                                load_map.insert(w_id, 1);
-                            }
-                        }
-                        WorkerSignal::Finished {w_id, j_id, result} => {
-                            if let Some(stream) = job_map.get_mut(&j_id) {
-                                if let Some(load) = load_map.get_mut(&w_id) {
-                                    if *load != 0 {
-                                        *load -= 1;
-                                        println!("Worker {} finished task {}", w_id, j_id);
-                                        let response = Response::json(StatusCode::Ok, result, None);
-                                        send(stream, &response).await;
-                                    } else {
-                                        let response = Response::json(StatusCode::Ok, result, None);
-                                        send(stream, &response).await;
-                                        println!("Worker {} finished untracked task", w_id);
-                                    }      
-                                } else {
-                                    let response = Response::json(StatusCode::Ok, result, None);
-                                    send(stream, &response).await;
-                                    println!("Worker {} finished untracked task", w_id);
-                                }  
-                                job_map.remove(&j_id);
-                            } else {
-                                println!("Worker {} finished task that belongs to no client. Task id: {}", w_id, j_id);
-                            }     
-                        }
-                        WorkerSignal::Failed {w_id, j_id, reason} => {
-                            if let Some(stream) = job_map.get_mut(&j_id) {
-                                if let Some(load) = load_map.get_mut(&w_id) {
-                                    if *load != 0 {
-                                        *load -= 1;
-                                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
-                                        send(stream, &response).await;
-                                        println!("Worker {} failed task {}", w_id, j_id);
-                                    } else {
-                                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
-                                        send(stream, &response).await;
-                                        println!("Worker {} failed untracked task", w_id);
-                                    }      
-                                } else {
-                                    let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
-                                    send(stream, &response).await;
-                                    println!("Worker {} failed untracked task", w_id);
-                                }
-                                job_map.remove(&j_id);
-                            } else {
-                                println!("Worker {} failed task that belongs to no client. Task id: {}, reason {}", w_id, j_id, reason);
-                            }   
-                        }
-                    }
+                Some(worker_signal) = internal_channels.feedback.rx.recv() => {
+                    handle_feedback(Arc::clone(&job_map), Arc::clone(&load_map), Arc::clone(&heartbeat_map), worker_signal).await;     
                 }
-                Some(mut task) = job_rx.recv() => {
-                    println!("Got request to run this function: {:?}", task.path);
-                    let workers = workers.clone();
-                    let l_map = Arc::clone(&load_map);
-                    let j_map = job_map.clone();
-                    tokio::spawn(async move {
-                        let workers = workers.read().await;
-                        let map = l_map.read().await;
-                        if let Some((id, _)) = map.iter().min_by_key(|(_, v)| *v) {
-                            if let Some(worker) = workers.iter().find(|w| w.id == *id) {
-                                let j_id = generate_job_id().await;
-                                let result = worker.sender.send(Message::Job{path: task.path, input: task.input, j_id}).await;
-                                match result {
-                                    Ok(_) => {
-                                        let mut map = j_map.write().await;
-                                        map.insert(j_id, task.stream);
-                                    }
-                                    Err(e) => {
-                                        let line = format!("Failed to send job to worker {}", e);
-                                        let response = Response::json(StatusCode::IntServerError, vec![], Some(line));
-                                        send(&mut task.stream, &response).await;
-                                        println!("Failed to send job to worker: {}", e)
-                                    },
-                                }
-                            } else {
-                                let vec = workers.iter().map(|w| w.id.clone()).collect::<Vec<_>>();
-                                let s = vec.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ");
-                                let line = format!("Failed to attach task to a worker because of inconsistent worker id's");
-                                let response = Response::json(StatusCode::IntServerError, vec![], Some(line));
-                                send(&mut task.stream, &response).await;
-                                println!("Tried to attach job to worker with id {}, but there is no such worker in worker pool. Workers available: {}", id, s);
-                            }
-                        } else {
-                            let line = format!("Failed to attach task to a worker because there are no workers");
-                            let response = Response::json(StatusCode::IntServerError, vec![], Some(line));
-                            send(&mut task.stream, &response).await;
-                            println!("Couldn't pick a worker, because load map contains exactly 0 elements");
-                        }
-                    });
+                Some(task) = job_rx.recv() => {
+                    handle_job(Arc::clone(&workers), Arc::clone(&load_map), Arc::clone(&job_map), task);
                 }
                 Some(cmd) = load_rx.recv() => {
-                    let db_pool = db_pool.clone();
-                    let feedback_tx = feedback_tx.clone();
-                    let tl_tx = tl_tx.clone();
-                    let workers = workers.clone();
-                    let gcc_tx = gcc_tx.clone();
-                    let l_map = Arc::clone(&load_map);
-                    match cmd {
-                        SchedulerCommand::Upgrade(n) => {
-                            tokio::spawn(async move {
-                                upgrade(workers.clone(), n, db_pool.clone(), feedback_tx.clone(), tl_tx.clone(), gcc_tx.clone(), l_map.clone()).await;
-                            });
-                        }
-                        SchedulerCommand::Downgrade(n) => {
-                            downgrade(workers.clone(), n, l_map.clone()).await;
-                        }
-                        SchedulerCommand::DropDeadWorker(n) => {
-                            drop_dead_worker(workers.clone(), n, l_map.clone()).await;
-                        }
-                    }
+                    handle_load(db_pool.clone(), &internal_channels, Arc::clone(&workers), Arc::clone(&load_map), gcc_tx.clone(), cmd).await;
+                    
                 }
-                Some(tl_signal) = tl_rx.recv() => {
+                Some(tl_signal) = internal_channels.telemetry.rx.recv() => {
                     let s_map = Arc::clone(&stats_map);
                     //provide here boundaries checking, huh? [[[[[[[[[[[[[[just me being extremely funny]]]]]]]]]]]]]]
                     let f_paths = Arc::clone(&forbidden_paths);

@@ -35,7 +35,7 @@ pub static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
 const MAX_STATS_ENTRIES: usize = 50_000;
 
-struct Scheduler {
+pub struct Scheduler {
     max_workers: usize,
     workers: Arc<RwLock<Vec<Worker>>>,
     ext_channels: ExternalChannels,
@@ -74,8 +74,8 @@ impl Scheduler {
         if self.int_channels.is_none() {
             panic!("Scheduler internal channels not found, panicking!");
         }
-        if self.ext_channels.job_rx.is_none() || self.int_channels.as_ref().unwrap().feedback.rx.is_none() {
-            panic!("Main feedback or tasks receivers not found for scheduler, panicking!");
+        if self.ext_channels.job_rx.is_none() {
+            panic!("Main tasks receiver not found for scheduler, panicking!");
         }
         let (load_tx, load_rx) = channel::<SchedulerCommand>(1024);
         

@@ -4,7 +4,7 @@ use super::api::execute::execute;
 use super::api::delete::delete;
 use crate::http::utils::{get_body_len, parse_request_line, read_body_chunked, read_headers};
 use crate::http::response::{Response, send, StatusCode};
-use crate::scheduler::model::Job;
+use crate::scheduler::types::Job;
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
