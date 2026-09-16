@@ -35,21 +35,94 @@ pub enum SchedulerCommand {
 }
 
 
-pub struct Scheduler {
-    pub max_workers: usize,
-    pub workers: Arc<RwLock<Vec<Worker>>>,
-    pub rx: Option<Receiver<Job>>,
-    pub load_rx: Option<Receiver<usize>>,
-    pub gcc_tx: Option<BcastSender<GCCSignal>>,
-    pub telemetry_tx: Option<Sender<CacherTelemetry>>,
-    pub telemetry_rx: Option<Receiver<CacherTelemetry>>,
-    pub feedback_tx: Option<Sender<WorkerSignal>>,
-    pub feedback_rx: Option<Receiver<WorkerSignal>>,
+struct Scheduler {
+    max_workers: usize,
+    workers: Arc<RwLock<Vec<Worker>>>,
+    ext_channels: ExternalChannels,
+    int_channels: Option<InternalChannels>,
+    tasks: RuntimeTasks,
+    db_pool: MySqlPool,
+    load_map: Arc<RwLock<HashMap<usize, usize>>>,
+}
+
+struct RuntimeTasks {
     pub scheduler_task: Option<JoinHandle<()>>,
     pub heartbeat_task: Option<JoinHandle<()>>,
     pub load_task: Option<JoinHandle<()>>,
-    pub db_pool: MySqlPool,
-    pub load_map: Arc<RwLock<HashMap<usize, usize>>>,
+    pub gcc_task: Option<JoinHandle<()>>,
+}
+
+impl RuntimeTasks {
+    fn empty() -> RuntimeTasks {
+        RuntimeTasks {
+            scheduler_task: None,
+            heartbeat_task: None,
+            load_task: None,
+            gcc_task: None,
+        }
+    }
+}
+
+struct ExternalChannels {
+    gcc_tx: Option<BcastSender<GCCSignal>>,
+    load_rx: Option<Receiver<usize>>,
+    job_rx: Option<Receiver<Job>>,
+}
+impl ExternalChannels {
+    fn init(job_rx: Receiver<Job>) -> ExternalChannels {
+        let (gcc_tx, _) = tokio::sync::broadcast::channel::<GCCSignal>(1024);
+        ExternalChannels {
+            gcc_tx: Some(gcc_tx),
+            load_rx: None,
+            job_rx: Some(job_rx),
+        }
+    }
+}
+
+pub struct InternalChannels {
+    pub feedback: Channel<WorkerSignal>,
+    pub telemetry: Channel<CacherTelemetry>,
+}
+
+impl InternalChannels {
+    fn init() -> InternalChannels {
+        let feeedback_channel: Channel<WorkerSignal> = Channel::new(1024);
+        let telemetry_channel: Channel<CacherTelemetry> = Channel::new(1024);
+        InternalChannels {
+            feedback: feeedback_channel,
+            telemetry: telemetry_channel,
+        }
+    }
+}
+
+pub struct Channel<T> {
+    pub tx: Sender<T>,
+    pub rx: Option<Receiver<T>>,
+}
+
+impl<T> Channel<T> {
+    fn new(buffer_size: usize) -> Channel<T> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<T>(buffer_size);
+        Channel { tx, rx: Some(rx) }
+    }
+}
+
+struct RuntimeState {
+    heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
+    job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
+    stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
+    forbidden_paths: Arc<RwLock<HashSet<String>>>
+}
+
+impl RuntimeState {
+    fn new() -> RuntimeState {
+        RuntimeState {
+            heartbeat_map: Arc::new(RwLock::new(HashMap::new())),
+            job_map: Arc::new(RwLock::new(HashMap::new())),
+            stats_map: Arc::new(RwLock::new(HashMap::new())),
+            forbidden_paths: Arc::new(RwLock::new(HashSet::new())),
+        }
+    }
 }
 
 static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
@@ -67,97 +140,73 @@ pub struct ModuleStats {
 const MAX_STATS_ENTRIES: usize = 50_000;
 
 impl Scheduler {
-    pub async fn initialize(worker_amount: usize, max_workers: usize, rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
+    pub async fn initialize(worker_amount: usize, max_workers: usize, job_rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
         let mut workers = Vec::new();
         let mut load_map = HashMap::new();
-        let (fb_tx, fb_rx) = channel::<WorkerSignal>(1024);
-        let (tl_tx, tl_rx) = channel::<CacherTelemetry>(1024);
-        let (gcc_tx, _) = tokio::sync::broadcast::channel::<GCCSignal>(1024);
+        let int_channels = InternalChannels::init();
+        let ext_channels = ExternalChannels::init(job_rx);
+        
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
-            let worker = Worker::spawn(i, pool, fb_tx.clone(), tl_tx.clone(), gcc_tx.clone()).await;
+            let worker = Worker::spawn(i, pool, int_channels.feedback.tx.clone(), int_channels.telemetry.tx.clone(), ext_channels.gcc_tx.clone().unwrap()).await;
             load_map.insert(i, 0);
             workers.push(worker);
         }
+        
         let scheduler = Scheduler {
             max_workers: max_workers,
             workers: Arc::new(RwLock::new(workers)),
-            rx: Some(rx),
-            gcc_tx: Some(gcc_tx),
-            telemetry_tx: Some(tl_tx),
-            telemetry_rx: Some(tl_rx),
-            feedback_tx: Some(fb_tx),
-            feedback_rx: Some(fb_rx),
-            load_rx: None,
-            load_task: None,
-            scheduler_task: None,
-            heartbeat_task: None,
+            int_channels: Some(int_channels),
+            ext_channels: ext_channels,
+            tasks: RuntimeTasks::empty(),
             db_pool,
             load_map: Arc::new(RwLock::new(load_map)),
         }; 
         scheduler
     }
     pub async fn run(&mut self) {
-        if self.rx.is_none() || self.feedback_rx.is_none() {
-            panic!("Main feedback and tasks receivers not found for scheduler, panicking!");
+        if self.int_channels.is_none() {
+            panic!("Scheduler internal channels not found, panicking!");
         }
-        let mut job_rx = self.rx.take().expect("Scheduler job receiver not found. FATAL: panicking");
-        let mut tl_rx = self.telemetry_rx.take().expect("Scheduler telemetry sender not found. FATAL: panicking");
-        let mut feedback_rx = self.feedback_rx.take().expect("Schedulet feedback receiver not found");
-
-        let (load_tx, mut load_rx) = channel::<SchedulerCommand>(1024);
-
-        let heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>> = Arc::new(RwLock::new(HashMap::new()));
-        let load_map = Arc::clone(&self.load_map);
-        let job_map: Arc<RwLock<HashMap<usize, TcpStream>>> = Arc::new(RwLock::new(HashMap::new()));
-        let stats_map: Arc<RwLock<HashMap<String, ModuleStats>>> = Arc::new(RwLock::new(HashMap::new()));
-        let s_map = Arc::clone(&stats_map);
-        let l_map = Arc::clone(&load_map);
-        let l_map_2 = Arc::clone(&l_map);
-        let h_map = Arc::clone(&heartbeat_map);
-        let forbidden_paths: Arc<RwLock<HashSet<String>>> = Arc::new(RwLock::new(HashSet::new()));
-        let f_paths = Arc::clone(&forbidden_paths);
-        let db_pool = self.db_pool.clone();
-        let feedback_tx = self.feedback_tx.clone().expect("Scheduler feedback sender not found. FATAL: panicking");
-        let tl_tx = self.telemetry_tx.clone().expect("Scheduler telemetry sender not found. FATAL: panicking");
-        let gcc_tx = self.gcc_tx.clone().expect("Scheduler gcc sender not found. FATAL: panicking");
-        let cache_tx = gcc_tx.clone();
-        let workers = Arc::clone(&self.workers);
-        let workers_clone = Arc::clone(&self.workers);
-        let workers_cloned = Arc::clone(&self.workers);
-
-        let cache_memory_usage: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
-        let cache_memory_usage_clone = Arc::clone(&cache_memory_usage);
-    
+        if self.ext_channels.job_rx.is_none() || self.int_channels.as_ref().unwrap().feedback.rx.is_none() {
+            panic!("Main feedback or tasks receivers not found for scheduler, panicking!");
+        }
+        let (load_tx, load_rx) = channel::<SchedulerCommand>(1024);
         
+        let load_map = Arc::clone(&self.load_map);
+        let db_pool = self.db_pool.clone();
+        
+        let gcc_tx = self.ext_channels.gcc_tx.clone().expect("Scheduler gcc sender not found. FATAL: panicking");
+        let workers = Arc::clone(&self.workers);
+        let cache_memory_usage: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
+        let state = RuntimeState::new();
         let main_loop = start_main_loop(
-            feedback_rx,
-            load_map,
-            job_map,
-            heartbeat_map,
-            job_rx,
-            workers_clone,
-            l_map_2,
+            Arc::clone(&load_map),
+            state.job_map,
+            Arc::clone(&state.heartbeat_map),
+            self.ext_channels.job_rx.take().unwrap(),
+            Arc::clone(&workers),
             load_rx,
             db_pool,
-            feedback_tx,
-            tl_tx,
-            tl_rx,
-            gcc_tx,
-            forbidden_paths,
-            cache_memory_usage,
-            stats_map,
+            self.int_channels.take().unwrap(),
+            gcc_tx.clone(),
+            Arc::clone(&state.forbidden_paths),
+            Arc::clone(&cache_memory_usage),
+            Arc::clone(&state.stats_map),
         ).await;
-        let gcc_loop = start_gcc_loop(workers_cloned, s_map, f_paths, cache_memory_usage_clone, cache_tx).await;
-        
-        let hb_tx = load_tx.clone();
-        let heartbeat_loop = start_hb_loop(hb_tx, h_map).await;
+        let gcc_loop = start_gcc_loop(Arc::clone(&workers), state.stats_map, state.forbidden_paths, cache_memory_usage, gcc_tx).await;
+        let heartbeat_loop = start_hb_loop(load_tx.clone(), state.heartbeat_map).await;
         let max_workers = self.max_workers;
-        let load_tx = load_tx.clone();
-        let load_loop = start_load_loop(max_workers, load_tx, l_map).await;
-        self.load_task = Some(load_loop);
-        self.heartbeat_task = Some(heartbeat_loop);
-        self.scheduler_task = Some(main_loop);
+        let load_loop = start_load_loop(max_workers, load_tx, load_map).await;
+
+        let tasks = RuntimeTasks {
+            scheduler_task: Some(main_loop),
+            heartbeat_task: Some(heartbeat_loop),
+            load_task: Some(load_loop),
+            gcc_task: Some(gcc_loop),
+        };
+        self.tasks = tasks;
     }
 }
 

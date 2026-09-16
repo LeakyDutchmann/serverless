@@ -1,6 +1,6 @@
 use crate::workers::model::{Worker, WorkerSignal, Message, CacherTelemetry, CacheErr};
 use crate::http::response::{Response, StatusCode, send};
-use crate::scheduler::model::{Job, ModuleStats};
+use crate::scheduler::model::{Job, ModuleStats, InternalChannels, Channel};
 
 use crate::scheduler::model::{SchedulerCommand, upgrade, downgrade, drop_dead_worker, generate_job_id};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
@@ -23,24 +23,18 @@ use ordered_float::OrderedFloat;
 
 pub async fn start_main_loop
 (
-    mut feedback_rx: Receiver<WorkerSignal>,
     load_map: Arc<RwLock<HashMap<usize, usize>>>,
     job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     mut job_rx: Receiver<Job>,
     workers: Arc<RwLock<Vec<Worker>>>,
-    l_map_2: Arc<RwLock<HashMap<usize, usize>>>,
     mut load_rx: Receiver<SchedulerCommand>,
     db_pool: MySqlPool,
-    feedback_tx: Sender<WorkerSignal>,
-    tl_tx: Sender<CacherTelemetry>,
-    mut tl_rx: Receiver<CacherTelemetry>,
+    internal_channels: InternalChannels,
     gcc_tx: BcastSender<GCCSignal>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
-    
-    
 ) -> JoinHandle<()> {
     let handle = tokio::spawn(async move {
         loop {
@@ -112,7 +106,7 @@ pub async fn start_main_loop
                 Some(mut task) = job_rx.recv() => {
                     println!("Got request to run this function: {:?}", task.path);
                     let workers = workers.clone();
-                    let l_map = l_map_2.clone();
+                    let l_map = Arc::clone(&load_map);
                     let j_map = job_map.clone();
                     tokio::spawn(async move {
                         let workers = workers.read().await;
@@ -155,7 +149,7 @@ pub async fn start_main_loop
                     let tl_tx = tl_tx.clone();
                     let workers = workers.clone();
                     let gcc_tx = gcc_tx.clone();
-                    let l_map = l_map_2.clone();
+                    let l_map = Arc::clone(&load_map);
                     match cmd {
                         SchedulerCommand::Upgrade(n) => {
                             tokio::spawn(async move {
