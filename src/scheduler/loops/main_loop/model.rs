@@ -1,8 +1,8 @@
 use crate::workers::model::{Worker, WorkerSignal, Message, CacherTelemetry, CacheErr};
 use crate::http::response::{Response, StatusCode, send};
-use crate::scheduler::model::{Job, ModuleStats, InternalChannels, Channel};
+use crate::scheduler::types::{Job, ModuleStats, InternalChannels, Channel};
 
-use crate::scheduler::model::{SchedulerCommand, upgrade, downgrade, drop_dead_worker, generate_job_id};
+use crate::scheduler::{types::SchedulerCommand, utils::{upgrade, downgrade, drop_dead_worker, generate_job_id}};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
 
 use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};

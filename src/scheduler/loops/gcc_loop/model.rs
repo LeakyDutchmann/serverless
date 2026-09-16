@@ -1,5 +1,5 @@
 use crate::workers::model::Worker;
-use crate::scheduler::model::ModuleStats;
+use crate::scheduler::types::ModuleStats;
 
 use tokio::time::{Instant, interval};
 use tokio::task::JoinHandle;

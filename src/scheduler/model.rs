@@ -13,9 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::{AtomicUsize}};
 use tokio::sync::RwLock;
 
-
-
-
 struct RuntimeState {
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,

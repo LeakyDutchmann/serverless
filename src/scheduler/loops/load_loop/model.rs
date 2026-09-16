@@ -1,4 +1,4 @@
-use crate::scheduler::model::SchedulerCommand;
+use crate::scheduler::types::SchedulerCommand;
 
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;

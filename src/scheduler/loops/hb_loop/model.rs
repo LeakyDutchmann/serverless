@@ -1,4 +1,4 @@
-use crate::scheduler::model::SchedulerCommand;
+use crate::scheduler::types::SchedulerCommand;
 use tokio::{sync::mpsc::Sender, time::{Instant, interval}};
 use tokio::task::JoinHandle;
 use std::collections::HashMap;

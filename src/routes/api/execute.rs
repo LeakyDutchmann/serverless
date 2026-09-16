@@ -1,4 +1,4 @@
-use crate::scheduler::model::Job;
+use crate::scheduler::types::Job;
 use crate::http::response::{Response, StatusCode, send};
 use crate::http::utils::{get_body_idx, get_body_len, get_input};
 
