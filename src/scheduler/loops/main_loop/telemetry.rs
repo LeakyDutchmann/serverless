@@ -7,6 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::AtomicUsize};
 use tokio::sync::RwLock;
 
+//This threshold is more of experimental thing. I have not built any extra stats eviction logic, because 
+// I hope that cache eviction signals will do the job. Anyway, I will test all of that.
+const MAX_STATS_ENTRIES: usize = 50_000;
+
 pub async fn handle_telemetry(
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>,
@@ -40,16 +44,19 @@ pub async fn handle_telemetry(
                                 println!("CACHING: Module on path {} requires negative amount of memory: {}", path, memory_usage);
                                 return;
                             }
-                            map.insert(path.clone(), ModuleStats {
-                                first_invocation: instant,
-                                invokations: 1,
-                                last_invocation: instant,
-                                pre_last_invocation: None,
-                                last_eviction: None,
-                                cached_instances: 1,
-                                memory_usage: memory_usage as usize,
-                            });
-                            cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                            if map.len() < MAX_STATS_ENTRIES {
+                                map.insert(path.clone(), ModuleStats {
+                                    first_invocation: instant,
+                                    invokations: 1,
+                                    last_invocation: instant,
+                                    pre_last_invocation: None,
+                                    last_eviction: None,
+                                    cached_instances: 1,
+                                    memory_usage: memory_usage as usize,
+                                });
+                                cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                            }
+            
                         }
                         Ok(None) => {
                             println!("CACHING: Failed to look up module at path: {}, MODULE NOT FOUND", path);
@@ -72,6 +79,9 @@ pub async fn handle_telemetry(
                         //Little note on this one: I don't think that part should stay this way, but I will handle it
                         // more gracefully later. One thing to remember is that this is FATAL error, no fall back - you have to shutdown
                         // server immediately!
+                    }
+                    if stats.cached_instances == 0 {
+                        map.remove(&path);
                     }
                 }
             },
@@ -98,17 +108,19 @@ pub async fn handle_telemetry(
                                 println!("CACHINGSTATS: Module on path {} requires negative amount of memory: {}", path, memory_usage);
                                 return;
                             }
-                            map.insert(path.clone(), ModuleStats {
-                                invokations: 1,
-                                first_invocation: instant,
-                                last_invocation: instant,
-                                pre_last_invocation: None,
-                                last_eviction: None,
-                                cached_instances: 0,
-                                memory_usage: memory_usage as usize,
-                            });
-                            cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
-                        }
+                            if map.len() < MAX_STATS_ENTRIES {
+                                map.insert(path.clone(), ModuleStats {
+                                    invokations: 1,
+                                    first_invocation: instant,
+                                    last_invocation: instant,
+                                    pre_last_invocation: None,
+                                    last_eviction: None,
+                                    cached_instances: 0,
+                                    memory_usage: memory_usage as usize,
+                                });
+                                cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }                    
                         Ok(None) => {
                             println!("CACHINGSTATS: Failed to look up module at path: {}, MODULE NOT FOUND", path);
                         }

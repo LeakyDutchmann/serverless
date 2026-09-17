@@ -33,8 +33,6 @@ impl RuntimeState {
 
 pub static NEXT_JOB_ID: AtomicUsize = AtomicUsize::new(1);
 
-const MAX_STATS_ENTRIES: usize = 50_000;
-
 pub struct Scheduler {
     max_workers: usize,
     workers: Arc<RwLock<Vec<Worker>>>,
