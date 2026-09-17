@@ -1,4 +1,3 @@
-use crate::http::utils::get_function_name;
 use crate::scheduler::loops::gcc_loop::model::{BcastSender, GCCSignal};
 use super::cache_manager::start_cache_loop;
 use super::main_loop::init::start_main_loop;
@@ -6,13 +5,11 @@ use super::main_loop::init::start_main_loop;
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::channel;
-use sqlx::{MySqlPool, Row};
+use sqlx::MySqlPool;
 use std::collections::HashMap;
-use tokio::select;
-use tokio::time::{interval, Duration};
 use tokio::sync::RwLock;
 use std::sync::Arc;
-use wasmtime::{Engine, Module, Store, Instance};
+use wasmtime::{Engine, Module};
 
 
 

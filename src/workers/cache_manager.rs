@@ -5,7 +5,6 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::select;
 use tokio::time::{interval, Duration};
 
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};

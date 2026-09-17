@@ -1,24 +1,11 @@
-use crate::workers::model::{Worker, WorkerSignal, Message, CacherTelemetry, CacheErr};
+use crate::workers::model::WorkerSignal;
 use crate::http::response::{Response, StatusCode, send};
-use crate::scheduler::types::{Job, ModuleStats, InternalChannels, Channel};
 
-use crate::scheduler::{types::SchedulerCommand, utils::{upgrade, downgrade, drop_dead_worker, generate_job_id}};
-use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
-
-use tokio::{sync::mpsc::{Receiver, Sender, channel}, time::{Instant, interval}};
-use sqlx::{MySqlPool, Row};
-use tokio::task::JoinHandle;
+use tokio::time::Instant;
 use tokio::net::TcpStream;
-use tokio::select;
-use wasmparser::TableType;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::Duration;
-use std::collections::BinaryHeap;
-use priority_queue::PriorityQueue;
-use std::cmp::Reverse;
-use ordered_float::OrderedFloat;
 
 pub async fn handle_feedback(
     job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
