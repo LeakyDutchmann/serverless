@@ -1,6 +1,6 @@
 use crate::scheduler::types::Job;
 use crate::http::response::{Response, StatusCode, send};
-use crate::http::utils::{get_body_idx, get_body_len, get_input};
+use crate::http::utils::get_input;
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;

@@ -42,6 +42,7 @@ pub enum CacheErr {
 
 pub struct Worker {
     pub main_loop: JoinHandle<()>,
+    pub cache_loop: JoinHandle<()>,
     pub id: usize,
     pub sender: Sender<Message>,
     pub load: usize, 
@@ -50,7 +51,7 @@ pub struct Worker {
 
 impl Worker {
     pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>) -> Self {
-        let (tx, mut rx) = channel::<Message>(1024);
+        let (tx, rx) = channel::<Message>(1024);
         let cache: Arc<RwLock<HashMap<String, Module>>> = Arc::new(RwLock::new(HashMap::new()));
         let jobs: Arc<RwLock<Vec<JoinHandle<()>>>> = Arc::new(RwLock::new(Vec::new()));
         let jobs_clone = Arc::clone(&jobs);
@@ -83,6 +84,7 @@ impl Worker {
         ).await;
         Worker {
             main_loop: task,
+            cache_loop,
             id,
             sender: tx,
             load: 0,
@@ -93,6 +95,7 @@ impl Worker {
         for job in self.jobs.write().await.iter_mut() {
             job.abort();
         }
+        self.cache_loop.abort();
         self.main_loop.abort();
         println!("Worker {} is stopped", self.id);
     }

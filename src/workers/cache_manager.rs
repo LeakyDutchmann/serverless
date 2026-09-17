@@ -5,7 +5,6 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::time::{interval, Duration};
 
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
 use crate::http::utils::get_function_name;
@@ -16,7 +15,6 @@ use crate::workers::model::{CacherTelemetry, CacheErr};
 pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastSender<GCCSignal>, tl_tx: Sender<CacherTelemetry>, cache: Arc<RwLock<HashMap<String, Module>>>) ->  JoinHandle<()>{
     tokio::spawn(async move {
         let mut rx = gcc_tx.subscribe();
-        let mut interval = interval(Duration::from_secs(10));
         while let Ok(signal) = rx.recv().await {
             let mut map = cache.write().await;
             match signal {
