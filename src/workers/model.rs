@@ -52,8 +52,6 @@ impl Worker {
     pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>) -> Self {
         let (tx, mut rx) = channel::<Message>(1024);
         let cache: Arc<RwLock<HashMap<String, Module>>> = Arc::new(RwLock::new(HashMap::new()));
-        let cache_copy = Arc::clone(&cache);
-        let tl_tx_copy = tl_tx.clone();
         let jobs: Arc<RwLock<Vec<JoinHandle<()>>>> = Arc::new(RwLock::new(Vec::new()));
         let jobs_clone = Arc::clone(&jobs);
 
@@ -66,17 +64,13 @@ impl Worker {
                 panic!("Failed to create engine: {}. FATAL: panicking!", e);
             }
         };
-
-        let cache_db = db_pool.clone();
-        let cache_engine = engine.clone();
         let cache_loop = start_cache_loop(
-            cache_engine,
-            cache_db,
+            engine.clone(),
+            db_pool.clone(),
             gcc_tx,
             tl_tx.clone(),
             Arc::clone(&cache)
         ).await;
-        
         let task = start_main_loop(
             engine,
             db_pool,
