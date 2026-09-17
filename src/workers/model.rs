@@ -95,5 +95,12 @@ impl Worker {
             jobs: jobs_clone,
         }     
     }
+    pub async fn stop(&mut self) {
+        for job in self.jobs.write().await.iter_mut() {
+            job.abort();
+        }
+        self.main_loop.abort();
+        println!("Worker {} is stopped", self.id);
+    }
 }
 

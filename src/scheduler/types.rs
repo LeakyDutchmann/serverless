@@ -1,6 +1,7 @@
 use crate::workers::model::{WorkerSignal, CacherTelemetry};
 
 use super::loops::gcc_loop::model::{GCCSignal, BcastSender};
+use super::shutdown::Shutdown;
 
 use tokio::{sync::mpsc::{Receiver, Sender}, time::Instant};
 use tokio::task::JoinHandle;
@@ -19,20 +20,18 @@ pub enum SchedulerCommand {
 }
 
 pub struct RuntimeTasks {
-    pub scheduler_task: Option<JoinHandle<()>>,
-    pub heartbeat_task: Option<JoinHandle<()>>,
-    pub load_task: Option<JoinHandle<()>>,
-    pub gcc_task: Option<JoinHandle<()>>,
+    pub scheduler_task: JoinHandle<()>,
+    pub heartbeat_task: JoinHandle<()>,
+    pub load_task: JoinHandle<()>,
+    pub gcc_task: JoinHandle<()>,
 }
 
 impl RuntimeTasks {
-    pub fn empty() -> RuntimeTasks {
-        RuntimeTasks {
-            scheduler_task: None,
-            heartbeat_task: None,
-            load_task: None,
-            gcc_task: None,
-        }
+    pub fn abort(&mut self) {
+        self.gcc_task.abort();
+        self.load_task.abort();
+        self.heartbeat_task.abort();
+        self.scheduler_task.abort();
     }
 }
 
@@ -40,14 +39,16 @@ pub struct ExternalChannels {
     pub gcc_tx: Option<BcastSender<GCCSignal>>,
     pub load_rx: Option<Receiver<usize>>,
     pub job_rx: Option<Receiver<Job>>,
+    pub shutdown_tx: Option<Sender<Shutdown>>,
 }
 impl ExternalChannels {
-    pub fn init(job_rx: Receiver<Job>) -> ExternalChannels {
+    pub fn init(job_rx: Receiver<Job>, shutdown_tx: Sender<Shutdown>) -> ExternalChannels {
         let (gcc_tx, _) = tokio::sync::broadcast::channel::<GCCSignal>(1024);
         ExternalChannels {
             gcc_tx: Some(gcc_tx),
             load_rx: None,
             job_rx: Some(job_rx),
+            shutdown_tx: Some(shutdown_tx),
         }
     }
 }

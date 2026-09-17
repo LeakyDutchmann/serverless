@@ -1,8 +1,10 @@
 use crate::workers::model::CacherTelemetry;
 use crate::scheduler::types::ModuleStats;
+use crate::scheduler::shutdown::Shutdown;
 
 use tokio::time::Instant;
 use sqlx::{MySqlPool, Row};
+use tokio::sync::mpsc::Sender;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::AtomicUsize};
 use tokio::sync::RwLock;
@@ -17,6 +19,7 @@ pub async fn handle_telemetry(
     cache_memory_usage: Arc<AtomicUsize>,
     db_pool: MySqlPool,
     tl_signal: CacherTelemetry,
+    shutdown_tx: Sender<Shutdown>,
 )  {
     tokio::spawn(async move {
         let mut map = stats_map.write().await;
@@ -75,10 +78,7 @@ pub async fn handle_telemetry(
                     if stats.memory_usage < current {
                         cache_memory_usage.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::SeqCst);
                     } else {
-                        panic!("Memory usage counter went inconsistent");
-                        //Little note on this one: I don't think that part should stay this way, but I will handle it
-                        // more gracefully later. One thing to remember is that this is FATAL error, no fall back - you have to shutdown
-                        // server immediately!
+                        let _ = shutdown_tx.send(Shutdown{reason: format!("Inconsistent memory usage counter. Using less memory than expected. Using: {}, expected min: {}", current, stats.memory_usage), instant: tokio::time::Instant::now()}).await;
                     }
                     if stats.cached_instances == 0 {
                         map.remove(&path);

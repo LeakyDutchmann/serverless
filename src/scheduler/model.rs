@@ -1,12 +1,13 @@
 use crate::workers::model::Worker;
 
+use super::shutdown::Shutdown;
 use super::loops::load_loop::model::start_load_loop;
 use super::loops::hb_loop::model::start_hb_loop;
 use super::loops::gcc_loop::model::start_gcc_loop;
 use super::loops::main_loop::model::start_main_loop;
 use super::types::{Job, ModuleStats, InternalChannels, ExternalChannels, RuntimeTasks, SchedulerCommand};
 
-use tokio::{sync::mpsc::{Receiver, channel}, time::Instant};
+use tokio::{sync::mpsc::{Receiver, channel, Sender}, time::Instant};
 use sqlx::MySqlPool;
 use tokio::net::TcpStream;
 use std::collections::{HashMap, HashSet};
@@ -38,17 +39,17 @@ pub struct Scheduler {
     workers: Arc<RwLock<Vec<Worker>>>,
     ext_channels: ExternalChannels,
     int_channels: Option<InternalChannels>,
-    tasks: RuntimeTasks,
+    tasks: Option<RuntimeTasks>,
     db_pool: MySqlPool,
     load_map: Arc<RwLock<HashMap<usize, usize>>>,
 }
 
 impl Scheduler {
-    pub async fn initialize(worker_amount: usize, max_workers: usize, job_rx: Receiver<Job>, db_pool: MySqlPool) -> Self {
+    pub async fn initialize(worker_amount: usize, max_workers: usize, job_rx: Receiver<Job>, db_pool: MySqlPool, shutdown_tx: Sender<Shutdown>) -> Self {
         let mut workers = Vec::new();
         let mut load_map = HashMap::new();
         let int_channels = InternalChannels::init();
-        let ext_channels = ExternalChannels::init(job_rx);
+        let ext_channels = ExternalChannels::init(job_rx, shutdown_tx);
         
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
@@ -62,7 +63,7 @@ impl Scheduler {
             workers: Arc::new(RwLock::new(workers)),
             int_channels: Some(int_channels),
             ext_channels: ext_channels,
-            tasks: RuntimeTasks::empty(),
+            tasks: None,
             db_pool,
             load_map: Arc::new(RwLock::new(load_map)),
         }; 
@@ -98,6 +99,7 @@ impl Scheduler {
             Arc::clone(&state.forbidden_paths),
             Arc::clone(&cache_memory_usage),
             Arc::clone(&state.stats_map),
+            self.ext_channels.shutdown_tx.take().unwrap(),
         ).await;
         let gcc_loop = start_gcc_loop(Arc::clone(&workers), state.stats_map, state.forbidden_paths, cache_memory_usage, gcc_tx).await;
         let heartbeat_loop = start_hb_loop(load_tx.clone(), state.heartbeat_map).await;
@@ -105,12 +107,22 @@ impl Scheduler {
         let load_loop = start_load_loop(max_workers, load_tx, load_map).await;
 
         let tasks = RuntimeTasks {
-            scheduler_task: Some(main_loop),
-            heartbeat_task: Some(heartbeat_loop),
-            load_task: Some(load_loop),
-            gcc_task: Some(gcc_loop),
+            scheduler_task: main_loop,
+            heartbeat_task: heartbeat_loop,
+            load_task: load_loop,
+            gcc_task: gcc_loop,
         };
-        self.tasks = tasks;
+        self.tasks = Some(tasks);
+    }
+    pub async fn shutdown(&mut self) {
+        let mut workers = self.workers.write().await;
+        for worker in workers.iter_mut() {
+            println!("Stopping worker {}", worker.id);
+            worker.stop().await; 
+        }
+        workers.clear();
+        self.tasks.as_mut().unwrap().abort();
+        self.load_map.write().await.clear();
     }
 }
 

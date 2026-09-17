@@ -1,7 +1,7 @@
 use crate::workers::model::Worker;
 use crate::scheduler::types::{Job, ModuleStats, InternalChannels};
 
-use crate::scheduler::types::SchedulerCommand;
+use crate::scheduler::{types::SchedulerCommand, shutdown::Shutdown};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
 use super::feedback::handle_feedback;
 use super::job::handle_job;
@@ -9,7 +9,7 @@ use super::load::handle_load;
 use super::telemetry::handle_telemetry;
 
 
-use tokio::{sync::mpsc::Receiver, time::Instant};
+use tokio::{sync::mpsc::{Receiver, Sender}, time::Instant};
 use sqlx::MySqlPool;
 use tokio::task::JoinHandle;
 use tokio::net::TcpStream;
@@ -32,6 +32,7 @@ pub async fn start_main_loop(
     forbidden_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
+    shutdown_tx: Sender<Shutdown>,
 ) -> JoinHandle<()> {
     let handle = tokio::spawn(async move {
         loop {
@@ -47,7 +48,7 @@ pub async fn start_main_loop(
                     
                 }
                 Some(tl_signal) = internal_channels.telemetry.rx.recv() => {
-                    handle_telemetry(Arc::clone(&stats_map), Arc::clone(&forbidden_paths), Arc::clone(&cache_memory_usage), db_pool.clone(), tl_signal).await;
+                    handle_telemetry(Arc::clone(&stats_map), Arc::clone(&forbidden_paths), Arc::clone(&cache_memory_usage), db_pool.clone(), tl_signal, shutdown_tx.clone()).await;
                 }
             }
         }
