@@ -24,7 +24,7 @@ pub async fn handle_job(
             return Err(e.to_string());
         }
     };
-    if let Some(module) = c_map.get(&path) {
+    if let Some(module) = c_map.get(&func_name) {
         let instance = match Instance::new(&mut store, &module, &[]) {
             Ok(instance) => instance,
             Err(e) => {

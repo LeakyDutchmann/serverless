@@ -32,31 +32,31 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                             let wasm: Vec<u8> = match row.try_get("wasm") {
                                 Ok(wasm) => wasm,
                                 Err(e) => {
-                                    let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::IoError{reason: e.to_string()}});
+                                    let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::IoError{reason: e.to_string()}}).await;
                                     continue;
                                 }
                             };
                             let module = match Module::new(&engine, wasm) {
                                 Ok(module) => module,
                                 Err(e) => {
-                                    let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::ModuleCreationError{reason: e.to_string()}});
+                                    let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::ModuleCreationError{reason: e.to_string()}}).await;
                                     continue;
                                 }
                             };
                             let _ = map.insert(path.clone(), module);
-                            let _ = tl_tx.send(CacherTelemetry::ModuleCached { path: path.clone()});
+                            let _ = tl_tx.send(CacherTelemetry::ModuleCached { path: path.clone()}).await;
                         },
                         Ok(None) => {
-                            let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::NotFound});
+                            let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::NotFound}).await;
                         }
                         Err(e) => {
-                            let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::IoError{reason: e.to_string()}});
+                             let _ = tl_tx.send(CacherTelemetry::FailedToCache{path: path.clone(), error: CacheErr::IoError{reason: e.to_string()}}).await;
                         }
                     };
                 }
                 GCCSignal::EvictModule { path } => {
                     map.remove(&path);
-                    let _ = tl_tx.send(CacherTelemetry::ModuleEvicted { path: path });
+                    let _ = tl_tx.send(CacherTelemetry::ModuleEvicted { path: path }).await;
                 }
             }
         }

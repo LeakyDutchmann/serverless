@@ -1,6 +1,7 @@
 use crate::workers::model::CacherTelemetry;
 use crate::scheduler::types::ModuleStats;
 use crate::scheduler::shutdown::Shutdown;
+use crate::http::utils::get_function_name;
 
 use tokio::time::Instant;
 use sqlx::{MySqlPool, Row};
@@ -29,6 +30,8 @@ pub async fn handle_telemetry(
             CacherTelemetry::ModuleCached{path} => {
                 if let Some(stats) = map.get_mut(&path) {
                     stats.cached_instances += 1;
+                    cache_memory_usage.fetch_add(stats.memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                    println!("Module cached: {}", path);
                 } else {
                     let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
                         .bind(path.clone())
@@ -58,6 +61,7 @@ pub async fn handle_telemetry(
                                     memory_usage: memory_usage as usize,
                                 });
                                 cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                                println!("CACHING: Added module on path: {}", path);
                             }
             
                         }
@@ -78,6 +82,7 @@ pub async fn handle_telemetry(
                     if stats.memory_usage < current {
                         cache_memory_usage.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::SeqCst);
                     } else {
+                        //Shutdown because when program thinks that is uses less memory than it does - it's bad
                         let _ = shutdown_tx.send(Shutdown{reason: format!("Inconsistent memory usage counter. Using less memory than expected. Using: {}, expected min: {}", current, stats.memory_usage), instant: tokio::time::Instant::now()}).await;
                     }
                     if stats.cached_instances == 0 {
@@ -91,8 +96,9 @@ pub async fn handle_telemetry(
                     stats.pre_last_invocation = Some(stats.last_invocation);
                     stats.last_invocation = instant;
                 } else {
+                    let func_name = get_function_name(&path);
                     let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
-                        .bind(path.clone())
+                        .bind(func_name)
                         .fetch_optional(&db_pool)
                         .await;
                     match result {
@@ -118,7 +124,6 @@ pub async fn handle_telemetry(
                                     cached_instances: 0,
                                     memory_usage: memory_usage as usize,
                                 });
-                                cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
                             }
                         }                    
                         Ok(None) => {

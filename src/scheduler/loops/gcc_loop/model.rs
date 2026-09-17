@@ -51,43 +51,48 @@ pub async fn start_gcc_loop
                 if let Some(pre_last) = stats.pre_last_invocation {
                     if stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60) {
                         if Instant::now().duration_since(stats.last_invocation) < Duration::from_secs(60) {
-                            let memory_needed = stats.memory_usage * w_counter + m_counter;
-                            if  memory_needed < MAX_MEMORY_USAGE {
-                                println!("Sending signal to cache module on path: {}", path);
-                                let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
-                            } else {
-                                println!("Not enough memory to cache module on path: {}", path);
-                                let mut memory_freed = 0;
-                                let use_time = Instant::now() - stats.first_invocation;
-                                let use_dynamic = stats.invokations as f64 / use_time.as_secs() as f64;
-                                loop {
-                                    if memory_freed >= memory_needed {
-                                        println!("Memory freed: {} >= memory needed: {}", memory_freed, memory_needed);
-                                        println!("Sending signal to cache module on path: {}", path);
-                                        let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
-                                        break;
-                                    }
-                                    if let Some((e_stats, Reverse(OrderedFloat(e_use_dynamic)))) = evict_candidates.peek() {
-                                        if memory_needed <= e_stats.total_memory_usage {
-                                            if e_use_dynamic < &use_dynamic {
-                                                let _ = cache_tx.send(GCCSignal::EvictModule{path: e_stats.path.clone()});
-                                                memory_freed += e_stats.total_memory_usage;
-                                                let _ = evict_candidates.pop();
-                                            }
+                            if stats.cached_instances < w_counter as u64 {
+                                let memory_needed = stats.memory_usage * w_counter + m_counter;
+                                if memory_needed < MAX_MEMORY_USAGE {
+                                    println!("Sending signal to cache module on path: {}", path);
+                                    let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
+                                } else {
+                                    println!("Not enough memory to cache module on path: {}", path);
+                                    let mut memory_freed = 0;
+                                    let use_time = Instant::now() - stats.first_invocation;
+                                    let use_dynamic = stats.invokations as f64 / use_time.as_secs() as f64;
+                                    loop {
+                                        if memory_freed >= memory_needed {
+                                            println!("Memory freed: {} >= memory needed: {}", memory_freed, memory_needed);
+                                            println!("Sending signal to cache module on path: {}", path);
+                                            let _ = cache_tx.send(GCCSignal::CacheModule{path: path.clone()});
+                                            break;
                                         }
-                                    } else {
-                                        break;
+                                        if let Some((e_stats, Reverse(OrderedFloat(e_use_dynamic)))) = evict_candidates.peek() {
+                                            if memory_needed <= e_stats.total_memory_usage {
+                                                if e_use_dynamic < &use_dynamic {
+                                                    let _ = cache_tx.send(GCCSignal::EvictModule{path: e_stats.path.clone()});
+                                                    memory_freed += e_stats.total_memory_usage;
+                                                    let _ = evict_candidates.pop();
+                                                }
+                                            }
+                                        } else {
+                                            break;
+                                        }
                                     }
+                                    
                                 }
-                                
                             }
+                            
                         
                         }
                     }
                 }
                 if Instant::now().duration_since(stats.last_invocation) > Duration::from_secs(120) {
                     println!("Sending signal to evict module on path: {}", path);
-                    let _ = cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
+                    if stats.cached_instances > 0 {
+                        let _ = cache_tx.send(GCCSignal::EvictModule{path: path.clone()});
+                    }
                 }
                 if stats.cached_instances > 0 {
                     let use_time = Instant::now() - stats.first_invocation;
@@ -102,6 +107,8 @@ pub async fn start_gcc_loop
                     }
                 }
             }
+            println!("Cache memory usage: {}", cache_memory_usage.load(Ordering::Relaxed));
+            println!("workers: {}", w_counter);
             evict_candidates.clear();
         }
     });
