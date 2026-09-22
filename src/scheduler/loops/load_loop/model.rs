@@ -20,17 +20,19 @@ pub async fn start_load_loop(
         loop {
             interval.tick().await;
             let map = l_map.read().await;
+            let workers = map.len();
             let mut busy_workes: Vec<(usize, usize)> = Vec::with_capacity(map.len());
             for (id, load) in map.iter() {
                 if load.task_count >= 4 {
                     busy_workes.push((*id, load.task_count));
                 }
-                if load.task_count == 0 {
-                    if Instant::now().duration_since(load.last_task_time) > Duration::from_secs(30) {
-                        let _ = load_tx.send(SchedulerCommand::Downgrade(*id)).await;
-                        println!("Sent downgrade command");  
+                if workers > 4 {
+                    if load.task_count == 0 {
+                        if Instant::now().duration_since(load.last_task_time) > Duration::from_secs(30) {
+                            let _ = load_tx.send(SchedulerCommand::Downgrade(*id)).await;
+                            println!("Sent downgrade command");  
+                        }    
                     }
-                    
                 }
             }
             if busy_workes.len() as f64 >= map.len() as f64 * 0.75 {
