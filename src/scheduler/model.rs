@@ -98,8 +98,8 @@ impl Scheduler {
             self.int_channels.take().unwrap(),
             gcc_tx.clone(),
             Arc::clone(&state.forbidden_paths),
-            Arc::clone(&next_worker),
             Arc::clone(&cache_memory_usage),
+            Arc::clone(&next_worker),
             Arc::clone(&state.stats_map),
             self.ext_channels.shutdown_tx.take().unwrap(),
         ).await;
