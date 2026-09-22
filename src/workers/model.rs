@@ -9,9 +9,25 @@ use sqlx::MySqlPool;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 use std::sync::Arc;
+use tokio::time::Instant;
 use wasmtime::{Engine, Module};
 
+pub type WorkerId = usize;
 
+pub struct WorkerLoad {
+    pub task_count: usize,
+    pub last_task_time: Instant,
+    
+}
+
+impl Default for WorkerLoad {
+    fn default() -> Self {
+        Self {
+            task_count: 0,
+            last_task_time: Instant::now(),
+        }
+    }
+}
 
 pub enum Message {
     Stop(String),
@@ -43,7 +59,7 @@ pub enum CacheErr {
 pub struct Worker {
     pub main_loop: JoinHandle<()>,
     pub cache_loop: JoinHandle<()>,
-    pub id: usize,
+    pub id: WorkerId,
     pub sender: Sender<Message>,
     pub load: usize, 
     pub jobs: Arc<RwLock<Vec<JoinHandle<()>>>>

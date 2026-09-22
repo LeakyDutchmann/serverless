@@ -1,5 +1,7 @@
 use crate::workers::model::Worker;
 use crate::scheduler::types::{Job, ModuleStats, InternalChannels};
+use crate::workers::model::WorkerId;
+use crate::workers::model::WorkerLoad;
 
 use crate::scheduler::{types::SchedulerCommand, shutdown::Shutdown};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
@@ -7,7 +9,6 @@ use super::feedback::handle_feedback;
 use super::job::handle_job;
 use super::load::handle_load;
 use super::telemetry::handle_telemetry;
-
 
 use tokio::{sync::mpsc::{Receiver, Sender}, time::Instant};
 use sqlx::MySqlPool;
@@ -20,7 +21,7 @@ use tokio::sync::RwLock;
 
 
 pub async fn start_main_loop(
-    load_map: Arc<RwLock<HashMap<usize, usize>>>,
+    load_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
     job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     mut job_rx: Receiver<Job>,
@@ -31,6 +32,7 @@ pub async fn start_main_loop(
     gcc_tx: BcastSender<GCCSignal>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
+    next_worker: Arc<AtomicUsize>,
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
     shutdown_tx: Sender<Shutdown>,
 ) -> JoinHandle<()> {
@@ -41,7 +43,7 @@ pub async fn start_main_loop(
                     handle_feedback(Arc::clone(&job_map), Arc::clone(&load_map), Arc::clone(&heartbeat_map), worker_signal).await;     
                 }
                 Some(task) = job_rx.recv() => {
-                    handle_job(Arc::clone(&workers), Arc::clone(&load_map), Arc::clone(&job_map), task);
+                    handle_job(Arc::clone(&workers), Arc::clone(&next_worker), Arc::clone(&job_map), task);
                 }
                 Some(cmd) = load_rx.recv() => {
                     handle_load(db_pool.clone(), &internal_channels, Arc::clone(&workers), Arc::clone(&load_map), gcc_tx.clone(), cmd).await;

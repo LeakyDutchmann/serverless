@@ -65,7 +65,7 @@ pub async fn start_main_loop(
                 _ = heartbeat.tick() => {
                     let result = fb_tx.send(WorkerSignal::HeartBeat{w_id: id}).await;
                     match result {
-                        Ok(_) => {continue}
+                        Ok(_) => {}
                         Err(e) => {
                             let mut jobs = jobs.write().await;
                             println!("Failed to send heartbeat: {:?}. Aborting all jobs from current worker", e);
@@ -76,6 +76,8 @@ pub async fn start_main_loop(
                             break;
                         }
                     }
+                    let mut jobs = jobs.write().await;
+                    jobs.retain(|j| !j.is_finished())
                 }
             }
         }

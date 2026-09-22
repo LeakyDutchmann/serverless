@@ -15,7 +15,7 @@ pub struct Job {
 
 pub enum SchedulerCommand {
     Upgrade(usize),
-    Downgrade(Vec<usize>),
+    Downgrade(usize),
     DropDeadWorker(usize)
 }
 

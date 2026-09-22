@@ -31,7 +31,7 @@ pub async fn handle_telemetry(
                 if let Some(stats) = map.get_mut(&path) {
                     stats.cached_instances += 1;
                     cache_memory_usage.fetch_add(stats.memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
-                    println!("Module cached: {}", path);
+                    println!("Module cached: {}, memory_usage: {}", path, stats.memory_usage);
                 } else {
                     let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
                         .bind(path.clone())
@@ -61,7 +61,7 @@ pub async fn handle_telemetry(
                                     memory_usage: memory_usage as usize,
                                 });
                                 cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
-                                println!("CACHING: Added module on path: {}", path);
+                                println!("CACHING: Added module on path: {}, memory_usage: {}", path, memory_usage);
                             }
             
                         }
@@ -79,10 +79,10 @@ pub async fn handle_telemetry(
                     stats.last_eviction = Some(instant);
                     stats.cached_instances -= 1;
                     let current = cache_memory_usage.load(std::sync::atomic::Ordering::SeqCst);
-                    if stats.memory_usage < current {
+                    if stats.memory_usage <= current {
                         cache_memory_usage.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::SeqCst);
                     } else {
-                        //Shutdown because when program thinks that is uses less memory than it does - it's bad
+                        //Shutdown because when program thinks that it uses less memory than it does - it's bad
                         let _ = shutdown_tx.send(Shutdown{reason: format!("Inconsistent memory usage counter. Using less memory than expected. Using: {}, expected min: {}", current, stats.memory_usage), instant: tokio::time::Instant::now()}).await;
                     }
                     if stats.cached_instances == 0 {

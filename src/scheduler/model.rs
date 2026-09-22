@@ -1,4 +1,4 @@
-use crate::workers::model::Worker;
+use crate::workers::model::{Worker, WorkerId, WorkerLoad};
 
 use super::shutdown::Shutdown;
 use super::loops::load_loop::model::start_load_loop;
@@ -41,20 +41,20 @@ pub struct Scheduler {
     int_channels: Option<InternalChannels>,
     tasks: Option<RuntimeTasks>,
     db_pool: MySqlPool,
-    load_map: Arc<RwLock<HashMap<usize, usize>>>,
+    load_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
 }
 
 impl Scheduler {
     pub async fn initialize(worker_amount: usize, max_workers: usize, job_rx: Receiver<Job>, db_pool: MySqlPool, shutdown_tx: Sender<Shutdown>) -> Self {
         let mut workers = Vec::new();
-        let mut load_map = HashMap::new();
+        let mut load_map: HashMap<WorkerId, WorkerLoad> = HashMap::new();
         let int_channels = InternalChannels::init();
         let ext_channels = ExternalChannels::init(job_rx, shutdown_tx);
         
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
             let worker = Worker::spawn(i, pool, int_channels.feedback.tx.clone(), int_channels.telemetry.tx.clone(), ext_channels.gcc_tx.clone().unwrap()).await;
-            load_map.insert(i, 0);
+            load_map.insert(i, WorkerLoad::default());
             workers.push(worker);
         }
         
@@ -84,6 +84,7 @@ impl Scheduler {
         let gcc_tx = self.ext_channels.gcc_tx.clone().expect("Scheduler gcc sender not found. FATAL: panicking");
         let workers = Arc::clone(&self.workers);
         let cache_memory_usage: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let next_worker: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(1));
 
         let state = RuntimeState::new();
         let main_loop = start_main_loop(
@@ -97,6 +98,7 @@ impl Scheduler {
             self.int_channels.take().unwrap(),
             gcc_tx.clone(),
             Arc::clone(&state.forbidden_paths),
+            Arc::clone(&next_worker),
             Arc::clone(&cache_memory_usage),
             Arc::clone(&state.stats_map),
             self.ext_channels.shutdown_tx.take().unwrap(),

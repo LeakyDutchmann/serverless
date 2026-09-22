@@ -107,7 +107,7 @@ pub async fn start_gcc_loop
                     }
                 }
             }
-            println!("Cache memory usage: {}", cache_memory_usage.load(Ordering::Relaxed));
+            println!("Cache memory usage: {}", cache_memory_usage.load(Ordering::SeqCst));
             println!("workers: {}", w_counter);
             evict_candidates.clear();
         }
