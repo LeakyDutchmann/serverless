@@ -8,8 +8,11 @@ pub fn validate_wasm_exports(module: &Module) -> anyhow::Result<()> {
     let mut has_alloc = false;
     let mut has_main = false;
     let mut has_forbiden = false;
+    let mut empty = true;
     for export in module.exports() {
+        empty = false;
         let name = export.name();
+        println!("export: {}", name);
         match export.ty() {
             ExternType::Memory(kind) => {
                 if has_memory {
@@ -79,6 +82,9 @@ pub fn validate_wasm_exports(module: &Module) -> anyhow::Result<()> {
     }
     if has_forbiden {
         return Err(anyhow::anyhow!("Wasm module contains forbidden exports"));
+    }
+    if empty {
+        return Err(anyhow::anyhow!("Wasm module contains no exports"));
     }
     Ok(())
 }
