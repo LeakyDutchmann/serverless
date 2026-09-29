@@ -8,61 +8,10 @@ use std::collections::HashMap;
 
 use crate::http::utils::get_function_name;
 use super::wasm_utils::run_wasm;
-use super::init::{MetricsPacket, MemoryUsage};
+use super::metrics::model::{MetricsPacket, update_metrics};
+use super::wasm_imports::model::CallerTable;
 use super::wasm_utils::create_wasm_instance;
 
-pub async fn update_metrics(metrics_map: Arc<RwLock<HashMap<String, MetricsPacket>>>, handling_started: Instant, store: &Store<MemoryUsage>, path: String, fuel_init: u64, cold: bool) {
-    let handling_ended = Instant::now();
-    let duration = handling_ended - handling_started;
-    let fuel_used = match store.get_fuel() {
-        Ok(fuel) => {
-            if fuel < fuel_init {
-                fuel_init - fuel
-            } else {
-                fuel_init
-            }
-        },
-        Err(e) => {
-            println!("MetricsErr: failed to fetch fuel from store: {:?}", e);
-            0
-        },
-    };
-    if let Some(m) = metrics_map.write().await.get_mut(&path) {
-        m.invocations += 1;
-        m.successes += 1;
-        m.duration_min = m.duration_min.min(duration);
-        m.duration_max = m.duration_max.max(duration);
-        m.duration_mean = Duration::from_millis(123);
-        m.window_end = handling_ended;
-        m.memory_peak = m.memory_peak.max(store.data().peak);
-        m.memory_min = m.memory_min.min(store.data().min);
-        m.fuel_used_total += fuel_used;
-        if cold {
-            m.cold_starts += 1;
-        }
-        println!("metrics: {:?}", m);
-    } else {
-        let mut measurements = MetricsPacket {
-            invocations: 1,
-            successes: 1,
-            failures: 0,
-            cold_starts: 0,
-            fuel_used_total: fuel_used,
-            duration_min: duration,
-            duration_max: duration,
-            duration_mean: duration,
-            window_start: handling_started,
-            window_end: handling_ended,
-            memory_peak: store.data().peak,
-            memory_min: store.data().min,
-        };
-        if cold {
-            measurements.cold_starts += 1;
-        }
-        println!("metrics: {:?}", measurements);
-        metrics_map.write().await.insert(path.clone(), measurements);
-    }
-}
 
 pub async fn handle_job(
     path: String,
@@ -78,7 +27,7 @@ pub async fn handle_job(
     
     let c_map = cache_map.read().await;
     let func_name = get_function_name(&path);
-    let mut store = Store::new(&engine, MemoryUsage::zero());
+    let mut store = Store::new(&engine, CallerTable::new());
     match store.set_fuel(fuel_init) {
         Ok(_) => {}
         Err(e) => {

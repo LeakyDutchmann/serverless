@@ -8,36 +8,10 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::time::{interval, Duration, Instant};
 
+
 use crate::workers::model::{CacherTelemetry, WorkerSignal, Message};
 use super::handler::handle_job;
-
-#[derive(Debug, Clone)]
-pub struct MetricsPacket {
-    pub invocations: u64,
-    pub successes: u64,
-    pub failures: u64,
-    pub cold_starts: u64,
-    pub fuel_used_total: u64,
-    pub memory_peak: u64,
-    pub memory_min: u64,
-    pub duration_min: Duration,
-    pub duration_max: Duration,
-    pub duration_mean: Duration,
-    pub window_start: Instant,
-    pub window_end: Instant,
-}
-
-pub struct MemoryUsage {
-    pub peak: u64,
-    pub min: u64,
-}
-
-impl MemoryUsage {
-    pub fn zero() -> Self {
-        Self { peak: 0, min: u64::MAX }
-    }
-    
-}
+use super::metrics::model::MetricsPacket;
 
 pub async fn start_main_loop(
     engine: Engine,
