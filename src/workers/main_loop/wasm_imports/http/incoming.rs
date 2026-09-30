@@ -21,7 +21,12 @@ pub fn register(mut linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Erro
 fn register_future_response_poll(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "future-incoming-response.poll", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);        
+        
         if let Some(future) = data.future_incoming_responses.get_mut(&handle) {
             let status = future.subscribe();
             if status.ready() {
@@ -55,7 +60,12 @@ fn register_future_response_poll(linker: &mut Linker<CallerTable>) -> Result<(),
 fn register_finish_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "incoming-body.finish", |mut caller: Caller<'_, CallerTable>, handle: i32| -> (i32, i32) {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((body, mut stream_handle)) = data.incoming_body.remove(&handle) {
             if stream_handle.handle.is_some() {
                 if let Some(_) = data.input_streams.remove(&stream_handle.handle.unwrap()) {
@@ -65,7 +75,8 @@ fn register_finish_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
                 }
             }
             //handle trailers!!!
-            let trailer =  IncomingBody::finish(body); 
+            // PLEASE DO SOMETHING...
+            let trailers =  IncomingBody::finish(body); 
             (0, 0)
         } else {
             return (1, 0)
@@ -77,7 +88,12 @@ fn register_finish_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
 fn register_drop_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "drop-incoming-body", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((_, stream_handle)) = data.incoming_body.remove(&handle) {
             if let Some(s_handle) = stream_handle.handle {
                 data.input_streams.remove(&s_handle);
@@ -93,7 +109,12 @@ fn register_drop_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Er
 fn register_drop_response(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "drop-incoming-response", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some(_) = data.incoming_responses.remove(&handle) {
             1
         } else {
@@ -106,7 +127,12 @@ fn register_drop_response(linker: &mut Linker<CallerTable>) -> Result<(), anyhow
 fn register_status(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "incoming-response.status", |mut caller: Caller<'_, CallerTable>, handle: i32 | -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some(response) = data.incoming_responses.get(&handle) {
             return response.status() as i32
         } else {
@@ -119,7 +145,12 @@ fn register_status(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error
 fn register_headers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "incoming-response.headers", |mut caller: Caller<'_, CallerTable>, handle: i32, offset: i32 | -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         let mut buffer = Vec::new();
         let mut len = 0;
         let offset = offset as usize;
@@ -128,7 +159,9 @@ fn register_headers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Erro
             for (name, value) in headers {
                 len += name.as_bytes().len() + value.len();
                 buffer.extend_from_slice(name.as_bytes());
+                buffer.extend_from_slice(b"\0");
                 buffer.extend(value);
+                buffer.extend_from_slice(b"\0");
             }
         } else {
             return 0
@@ -145,7 +178,12 @@ fn register_headers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Erro
 fn register_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "incoming-response.body", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+
         if let Some(resp) = data.incoming_responses.get(&handle) {
             match resp.consume() {
                 Ok(body) => {
@@ -168,7 +206,12 @@ fn register_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
 fn register_stream(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "incoming-body.stream", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((body, stream_handle)) = data.incoming_body.get_mut(&handle) {
             if stream_handle.handle.is_some() || stream_handle.released {
                 return 0

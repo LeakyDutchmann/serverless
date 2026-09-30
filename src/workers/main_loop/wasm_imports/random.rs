@@ -9,8 +9,7 @@ pub fn provide_random(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Er
         let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
         let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
-        data.memory_usage.peak = m_usage.max(data.memory_usage.peak);
-        data.memory_usage.min = m_usage.min(data.memory_usage.min);
+        data.memory_usage.update(m_usage);
         random
     }) {
         Ok(_) => Ok(()),

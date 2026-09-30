@@ -11,13 +11,21 @@ use super::http::model::provide_http;
 pub struct MemoryUsage {
     pub peak: u64,
     pub min: u64,
+    pub mean: f64,
+    pub updates: u64
 }
 
 impl MemoryUsage {
     pub fn zero() -> Self {
-        Self { peak: 0, min: u64::MAX }
+        Self { peak: 0, min: u64::MAX, mean: 0.0, updates: 0 }
     }
-    
+    pub fn update(&mut self, usage: u64) {
+        let new_count = self.updates + 1;
+        self.mean = (self.mean * (self.updates as f64) + usage as f64) / new_count as f64;
+        self.updates = new_count;
+        self.peak = self.peak.max(usage);
+        self.min = self.min.min(usage);
+    }
 }
 
 

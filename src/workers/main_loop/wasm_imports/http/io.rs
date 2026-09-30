@@ -14,6 +14,8 @@ fn register_read(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
         let offset = offset as usize;
         let len_to_read = len_to_read as u64;
         let mut buffer = Vec::new();
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
         if let Some((stream, _)) = data.input_streams.get(&handle) {
             match stream.read(len_to_read) {
@@ -26,11 +28,11 @@ fn register_read(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
                 }
             }
         }
-        if buffer.len() > 0 {
-            let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        if buffer.len() > 0 { 
+            data.memory_usage.update(m_usage + buffer.len() as u64);
             memory.write(caller, offset, &buffer).unwrap();
         }
-        1
+        buffer.len() as i32
     })?;
     Ok(())
 }
@@ -39,9 +41,17 @@ fn register_write(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error>
     linker.func_wrap("wasi:io/streams", "write", |mut caller: Caller<'_, CallerTable>, handle: i32, ptr: i32, len: i32 | -> i32 {
         let handle = handle as u32;
         let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let mut buffer = vec![0u8; len as usize];
-        memory.read(&caller, ptr as usize, &mut buffer);
-        let mut data = caller.data_mut();
+        match memory.read(&caller, ptr as usize, &mut buffer) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("Failed to read from memory: {:?}", e);
+                return 0;
+            }
+        }
+        let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
         if let Some((stream, _)) = data.output_streams.get_mut(&handle) {
             match stream.write(&buffer) {
                 Ok(_) => 1,
@@ -60,7 +70,12 @@ fn register_write(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error>
 fn register_drop(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "output-stream.drop", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((_, p_handle)) = data.output_streams.remove(&handle) {
             if let Some((_, stream_handle)) = data.outgoing_body.get_mut(&p_handle.handle) {
                 stream_handle.handle = None;
@@ -75,7 +90,12 @@ fn register_drop(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
     })?;
     linker.func_wrap("wasi:http/types", "input-stream.drop", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((_, p_handle)) = data.input_streams.remove(&handle) {
             if let Some((_, stream_handle)) = data.incoming_body.get_mut(&p_handle.handle) {
                 stream_handle.handle = None;

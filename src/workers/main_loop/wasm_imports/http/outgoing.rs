@@ -1,4 +1,3 @@
-use tokio_tungstenite::tungstenite::stream;
 use wasi::http::types::{OutgoingRequest, Scheme,  OutgoingBody, IncomingResponse, IncomingBody, Fields, Method};
 use wasi::http::outgoing_handler;
 use wasmtime::{Linker, Caller};
@@ -21,7 +20,12 @@ pub fn register(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
 fn register_handle(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "handle", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((request, body_handle)) = data.outgoing_requests.remove(&handle) {
             if body_handle.handle.is_some() {
                 if let Some((body, stream_handle)) = data.outgoing_body.remove(&body_handle.handle.unwrap()) {
@@ -63,9 +67,13 @@ fn register_handle(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error
 
 fn register_new_request(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "new-outgoing-request", |mut caller: Caller<'_, CallerTable>| -> i32 {
-        let mut buffer = [0u8; 4096];
         let request = OutgoingRequest::new(Fields::new());
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         let handle = data.next_handle;
         data.next_handle += 1;
         data.outgoing_requests.insert(handle, (request, BodyHandle::empty()));
@@ -78,7 +86,12 @@ fn register_new_request(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
 fn register_set_method(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "outgoing-request.set-method", |mut caller: Caller<'_, CallerTable>, handle: i32, method: i32| -> (i32, i32) {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((req, _)) = data.outgoing_requests.get_mut(&handle) {
             let method = match method {
                 0 => Method::Get,
@@ -101,7 +114,11 @@ fn register_set_method(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::E
 fn register_set_scheme(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "outgoing-request.set-scheme", |mut caller: Caller<'_, CallerTable>, handle: i32, scheme: i32| -> (i32, i32) {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
 
         if let Some((req, _)) = data.outgoing_requests.get_mut(&handle) {
             let scheme = match scheme {
@@ -126,13 +143,20 @@ fn register_append_header(linker: &mut Linker<CallerTable>) -> Result<(), anyhow
     linker.func_wrap("wasi:http/types", "outgoing-request.append-header", |mut caller: Caller<'_, CallerTable>, handle: i32, name_ptr: i32, name_len: i32, val_ptr: i32, val_len: i32| -> (i32, i32) {
         let handle = handle as u32;
         let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let mut buffer = [0u8; 4096];
         memory.read(&caller, name_ptr as usize, &mut buffer).unwrap();
         let name = String::from_utf8_lossy(&buffer[..name_len as usize]);
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
         if let Some((req, _)) = data.outgoing_requests.get_mut(&handle) {
-            req.headers().append(&name, &buffer[val_ptr as usize..val_len as usize]);
-            return (0, 0)
+            match req.headers().append(&name, &buffer[val_ptr as usize..val_len as usize]) {
+                Ok(_) => (0, 0),
+                Err(e) => {
+                    println!("Failed to append header: {}", e);
+                    (1, 0)
+                },
+            }
         } else {
             return (1, 0)
         }
@@ -144,15 +168,22 @@ fn register_set_authority(linker: &mut Linker<CallerTable>) -> Result<(), anyhow
     linker.func_wrap("wasi:http/types", "outgoing-request.set-authority", |mut caller: Caller<'_, CallerTable>, handle: i32, authority_ptr: i32, authority_len: i32| -> (i32, i32) {
         let handle = handle as u32;
         let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller);        
         let mut buffer = [0u8; 4096];
         memory.read(&caller, authority_ptr as usize, &mut buffer).unwrap();
         let authority = String::from_utf8_lossy(&buffer[..authority_len as usize]);
 
         //Here you have to provide authority checks. Is this goddamn website allowed at all?
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage as u64);
         if let Some((req, _)) = data.outgoing_requests.get_mut(&handle) {
-            req.set_authority(Some(&authority));
-            return (0, 0)
+            match req.set_authority(Some(&authority)) {
+                Ok(_) => (0, 0),
+                Err(e) => {
+                    eprintln!("failed to set_authority: {:?}", e);
+                    (1, 0)
+                }
+            }
         } else {
             return (1, 0)
         }
@@ -163,7 +194,12 @@ fn register_set_authority(linker: &mut Linker<CallerTable>) -> Result<(), anyhow
 fn register_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "outgoing-request.body", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
-        let mut data = caller.data_mut();
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
+        let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((req, body_handle)) = data.outgoing_requests.get_mut(&handle) {
             let new_handle = data.next_handle;
             data.next_handle += 1;
@@ -184,7 +220,12 @@ fn register_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
 fn register_body_stream(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "outgoing-body.stream", |mut caller: Caller<'_, CallerTable>, body_handle: i32, ptr: i32, len: i32| -> i32 {
         let handle = body_handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((body, stream_handle)) = data.outgoing_body.get_mut(&handle) {
             if stream_handle.handle.is_some() || stream_handle.released {
                 return 0
@@ -208,7 +249,12 @@ fn register_body_stream(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
 fn register_body_finish(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "outgoing-body.finish", |mut caller: Caller<'_, CallerTable>, handle: i32| -> (i32, i32) {
         let handle = handle as u32;
-        let mut data = caller.data_mut();
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
+        let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((body, stream_handle)) = data.outgoing_body.remove(&handle) {
             if stream_handle.handle.is_some() {
                 if let Some(_) = data.output_streams.remove(&stream_handle.handle.unwrap()) {
@@ -217,12 +263,14 @@ fn register_body_finish(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
                     return (1, 0)
                 }
             }
-            match OutgoingBody::finish(body, None) {
+            //handle those goddamn trailers!
+            let trailers = match OutgoingBody::finish(body, None) {
                 Ok(v) =>  {
-                    return (0, 0)
+                    v
                 },
                 Err(e) => return (1, 0),
-            }
+            };
+            (0, 0)
         } else {
             return (1, 0)
         }
@@ -233,7 +281,12 @@ fn register_body_finish(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
 fn register_drops(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "drop-outgoing-request", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some(_) = data.outgoing_requests.remove(&handle) {
             1
         } else {
@@ -242,7 +295,12 @@ fn register_drops(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error>
     })?;
     linker.func_wrap("wasi:http/types", "drop-outgoing-body", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller) as u64;
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage);
+        
         if let Some((_, stream_handle)) = data.outgoing_body.remove(&handle) {
             if stream_handle.handle.is_some() {
                 if let Some(_) = data.output_streams.remove(&stream_handle.handle.unwrap()) {
