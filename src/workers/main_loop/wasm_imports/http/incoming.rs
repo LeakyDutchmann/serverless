@@ -126,7 +126,12 @@ fn register_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Err
 fn register_drop_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
     linker.func_wrap("wasi:http/types", "incoming-body.trailers.drop", |mut caller: Caller<'_, CallerTable>, handle: i32| {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller);
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage as u64);
+        
         if let Some(_) = data.incoming_trailers.remove(&handle) {
             
         } else {
@@ -135,7 +140,12 @@ fn register_drop_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow
     })?;
     linker.func_wrap("wasi:http/types", "incoming-body.future-trailers.drop", |mut caller: Caller<'_, CallerTable>, handle: i32| {
         let handle = handle as u32;
+        
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller);
         let data = caller.data_mut();
+        data.memory_usage.update(m_usage as u64);
+        
         if let Some(_) = data.future_trailers.remove(&handle) {
             
         } else {
