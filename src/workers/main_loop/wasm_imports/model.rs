@@ -1,7 +1,7 @@
 use wasmtime::Linker;
 use tokio::time::{Duration, Instant};
 use std::collections::HashMap;
-use wasi::http::types::{OutgoingRequest, OutgoingBody, IncomingResponse, OutputStream, InputStream, IncomingBody, FutureIncomingResponse};
+use wasi::http::types::{Fields, FutureTrailers, OutgoingRequest, OutgoingBody, IncomingResponse, OutputStream, InputStream, IncomingBody, FutureIncomingResponse};
 
 use super::logging::provide_logging;
 use super::random::provide_random;
@@ -54,6 +54,19 @@ impl BodyHandle {
     }
 }
 
+pub struct TrailersHandle {
+    pub handle: Option<u32>,
+}
+
+impl TrailersHandle {
+    pub fn empty() -> Self {
+        Self { handle: None }
+    }
+    pub fn from(handle: u32) -> Self {
+        Self { handle: Some(handle) }
+    }
+}
+
 pub struct CallerTable {
     pub next_handle: u32,
     pub memory_usage: MemoryUsage,
@@ -62,8 +75,11 @@ pub struct CallerTable {
     pub incoming_responses: HashMap<u32, IncomingResponse>,
     pub output_streams: HashMap<u32, (OutputStream, ParentHandle)>,
     pub input_streams: HashMap<u32, (InputStream, ParentHandle)>,
-    pub outgoing_body: HashMap<u32, (OutgoingBody, StreamHandle)>,
+    pub outgoing_body: HashMap<u32, (OutgoingBody, StreamHandle, TrailersHandle)>,
     pub incoming_body: HashMap<u32, (IncomingBody, StreamHandle)>,
+    pub outgoing_trailers: HashMap<u32, Fields>,
+    pub incoming_trailers: HashMap<u32, Fields>,
+    pub future_trailers: HashMap<u32, FutureTrailers>,
 }
 
 impl CallerTable {
@@ -78,7 +94,9 @@ impl CallerTable {
             input_streams: HashMap::new(),
             outgoing_body: HashMap::new(),
             incoming_body: HashMap::new(),
-            
+            future_trailers: HashMap::new(),
+            incoming_trailers: HashMap::new(),
+            outgoing_trailers: HashMap::new(),
         }
     }
 }

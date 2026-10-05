@@ -15,6 +15,9 @@ pub fn register(mut linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Erro
     register_drop_body(&mut linker)?;
     register_finish_body(&mut linker)?;
     register_future_response_poll(&mut linker)?;
+    register_trailers(&mut linker)?;
+    register_future_trailers(&mut linker)?;
+    register_drop_trailers(&mut linker)?;
     Ok(())
 }
 
@@ -58,7 +61,7 @@ fn register_future_response_poll(linker: &mut Linker<CallerTable>) -> Result<(),
 }
 
 fn register_finish_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
-    linker.func_wrap("wasi:http/types", "incoming-body.finish", |mut caller: Caller<'_, CallerTable>, handle: i32| -> (i32, i32) {
+    linker.func_wrap("wasi:http/types", "incoming-body.finish", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
         let handle = handle as u32;
         
         let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
@@ -71,15 +74,121 @@ fn register_finish_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
                 if let Some(_) = data.input_streams.remove(&stream_handle.handle.unwrap()) {
                     stream_handle.released = true;
                 } else {
-                    return (1, 0)
+                    return 0
                 }
             }
-            //handle trailers!!!
-            // PLEASE DO SOMETHING...
             let trailers =  IncomingBody::finish(body); 
-            (0, 0)
+            let new_handle = data.next_handle;
+            data.next_handle += 1;
+            data.future_trailers.insert(new_handle as u32, trailers);
+            new_handle as i32
         } else {
-            return (1, 0)
+            return 0
+        }
+    })?;
+    Ok(())
+}
+
+fn register_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
+    linker.func_wrap("wasi:http/types", "incoming-body.trailers.get", |mut caller: Caller<'_, CallerTable>, handle: i32, offset: i32| -> i32 {
+        let handle = handle as u32;
+        let offset = offset as usize;
+
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller);
+        let data = caller.data_mut();
+        data.memory_usage.update(m_usage as u64);
+
+        let mut buffer = Vec::new();
+        if let Some(trailers) = data.incoming_trailers.get(&handle) {
+            let entries = trailers.entries();
+            for (name, value) in entries {
+                buffer.extend_from_slice(name.as_bytes());
+                buffer.extend_from_slice(b"\0");
+                buffer.extend(value);
+                buffer.extend_from_slice(b"\0");
+            }
+        } else {
+            return 0
+        }
+        let len = buffer.len();
+        match memory.write(&mut caller, offset, &buffer) {
+            Ok(_) => {
+                if len != 0 { len as i32 } else { 0 }
+            }
+            Err(_) => return 0,
+        }
+        
+    })?;
+    Ok(())
+}
+
+fn register_drop_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
+    linker.func_wrap("wasi:http/types", "incoming-body.trailers.drop", |mut caller: Caller<'_, CallerTable>, handle: i32| {
+        let handle = handle as u32;
+        let data = caller.data_mut();
+        if let Some(_) = data.incoming_trailers.remove(&handle) {
+            
+        } else {
+            println!("Guest tried to drop trailers that are not present");
+        }
+    })?;
+    linker.func_wrap("wasi:http/types", "incoming-body.future-trailers.drop", |mut caller: Caller<'_, CallerTable>, handle: i32| {
+        let handle = handle as u32;
+        let data = caller.data_mut();
+        if let Some(_) = data.future_trailers.remove(&handle) {
+            
+        } else {
+            println!("Guest tried to drop future trailers that are not present");
+        }
+    })?;
+    Ok(())
+}
+
+fn register_future_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
+    linker.func_wrap("wasi:http/types", "incoming-body.trailers.poll", |mut caller: Caller<'_, CallerTable>, handle: i32| -> i32 {
+        let handle = handle as u32;
+
+        let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+        let m_usage = memory.data_size(&caller);
+        let data = caller.data_mut();
+        data.memory_usage.update(m_usage as u64);
+
+        if let Some(trailers) = data.future_trailers.get_mut(&handle) {
+            let pollable = trailers.subscribe();
+
+            if pollable.ready() {
+                let result = trailers.get().unwrap();
+                let result = match result {
+                    Ok(res) => {res
+                        
+                    }
+                    Err(e) => {
+                        println!("failed to get trailers: {:?}", e);
+                        return 0
+                    }
+                };
+                match result {
+                    Ok(trailers) => {
+                        let new_handle = data.next_handle;
+                        data.next_handle += 1;
+                        if let Some(trailers) = trailers {
+                            data.incoming_trailers.insert(new_handle, trailers);
+                            return new_handle as i32
+                        } else {
+                            return 0
+                        }
+                    }
+                    Err(e) => {
+                        println!("failed to get trailers: {:?}", e);
+                        return 0
+                    }
+                }
+            } else {
+                return 0
+            }
+        } else {
+            return 0
         }
     })?;
     Ok(())
@@ -152,12 +261,10 @@ fn register_headers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Erro
         data.memory_usage.update(m_usage);
         
         let mut buffer = Vec::new();
-        let mut len = 0;
         let offset = offset as usize;
         if let Some(response) = data.incoming_responses.get(&handle) {
             let headers = response.headers().entries();
             for (name, value) in headers {
-                len += name.as_bytes().len() + value.len();
                 buffer.extend_from_slice(name.as_bytes());
                 buffer.extend_from_slice(b"\0");
                 buffer.extend(value);
@@ -166,6 +273,7 @@ fn register_headers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Erro
         } else {
             return 0
         }
+        let len = buffer.len();
         let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
         match memory.write(caller, offset, &buffer) {
             Ok(_) => {if len != 0 { len as i32 } else { 1 }},

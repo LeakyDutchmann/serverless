@@ -77,7 +77,7 @@ fn register_drop(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
         data.memory_usage.update(m_usage);
         
         if let Some((_, p_handle)) = data.output_streams.remove(&handle) {
-            if let Some((_, stream_handle)) = data.outgoing_body.get_mut(&p_handle.handle) {
+            if let Some((_, stream_handle, _)) = data.outgoing_body.get_mut(&p_handle.handle) {
                 stream_handle.handle = None;
                 stream_handle.released = true;
             } else {
