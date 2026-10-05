@@ -1,20 +1,55 @@
-use wasmtime::{Engine, Module, Store, Linker, Caller};
+use wasmtime::{Engine, Module, Store, Linker};
 use super::functions::validate_alloc_pointer;
 use super::imports::validate_wasm_imports;
 use super::exports::validate_wasm_exports;
+pub use crate::workers::main_loop::wasm_imports::model::{CallerTable, provide_imports};
 
-pub const ALLOWED: &[&str] = &["log", "now_ms", "random_u64", "http_fetch", "kv_get", "kv_set", "result_write"];
+pub const ALLOWED: &[&str] = &[
+    // custom host functions
+    "log",
+    "now_ms",
+    "random_u64",
+    "http_fetch",
+    "kv_get",
+    "kv_set",
+    "result_write",
 
-pub fn provide_pre_imports(linker: &mut Linker<()>) {
-    linker.func_wrap("host", "log", |_: Caller<'_, ()>, _: i32, _: i32| {
-    }).unwrap();
-    linker.func_wrap("host", "now_ms", | | -> i64 {0}).unwrap();
-    linker.func_wrap("host", "random_u64", | | -> i64  {0}).unwrap();
-    linker.func_wrap("host", "http_fetch", |_: Caller<'_, ()>, _: i32, _: i32| -> (i32, i32) {(0, 0)}).unwrap();
-    linker.func_wrap("host", "kv_get", |_: Caller<'_, ()>, _: i32, _: i32| -> (i32, i32) {(0, 0)}).unwrap();
-    linker.func_wrap("host", "kv_set", |_: Caller<'_, ()>, _: i32, _: i32|{}).unwrap();
-    linker.func_wrap("host", "result_write", |_: Caller<'_, ()>, _: i32, _: i32| {}).unwrap();
-}
+    // wasi:http/types — incoming
+    "incoming-response.status",
+    "incoming-response.headers",
+    "incoming-response.body",
+    "incoming-body.stream",
+    "incoming-body.finish",
+    "incoming-body.trailers.get",
+    "incoming-body.trailers.drop",
+    "incoming-body.future-trailers.drop",
+    "incoming-body.trailers.poll",
+    "future-incoming-response.poll",
+    "drop-incoming-body",
+    "drop-incoming-response",
+
+    // wasi:http/types — outgoing
+    "new-outgoing-request",
+    "outgoing-request.set-method",
+    "outgoing-request.set-scheme",
+    "outgoing-request.append-header",
+    "outgoing-request.set-authority",
+    "outgoing-request.body",
+    "outgoing-body.stream",
+    "outgoing-body.append-trailer",
+    "outgoing-body.finish",
+    "drop-outgoing-request",
+    "drop-outgoing-body",
+    "handle",
+
+    // wasi:io/streams
+    "read",
+    "write",
+
+    // stream drops
+    "output-stream.drop",
+    "input-stream.drop",
+];
 
 pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::Result<()>{
     match validate_wasm_exports(&module) {
@@ -35,9 +70,15 @@ pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::R
             return Err(anyhow::anyhow!("{}", e));
         }
     }
-    let mut store = Store::new(&engine, ());
+    let mut store = Store::new(&engine, CallerTable::new());
     let mut linker = Linker::new(&engine);
-    provide_pre_imports(&mut linker);
+    match provide_imports(&mut linker) {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("{}", e);
+            return Err(anyhow::anyhow!("failed to provide imports to module: {}", e));
+        }
+    }
     let instance = match linker.instantiate(&mut store, &module) {
         Ok(i) => i,
         Err(e) => {

@@ -1,8 +1,7 @@
 use sqlx::{MySqlPool, Row};
 use wasmtime::{Engine, Instance, Module, Store};
 use tokio::sync::RwLock;
-use tokio::time::{Duration, Instant};
-use std::mem;
+use tokio::time::Instant;
 use std::sync::Arc;
 use std::collections::HashMap;
 

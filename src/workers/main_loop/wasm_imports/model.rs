@@ -1,5 +1,4 @@
 use wasmtime::Linker;
-use tokio::time::{Duration, Instant};
 use std::collections::HashMap;
 use wasi::http::types::{Fields, FutureTrailers, OutgoingRequest, OutgoingBody, IncomingResponse, OutputStream, InputStream, IncomingBody, FutureIncomingResponse};
 

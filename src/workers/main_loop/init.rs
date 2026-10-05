@@ -6,7 +6,7 @@ use tokio::select;
 use tokio::sync::RwLock;
 use std::sync::Arc;
 use std::collections::HashMap;
-use tokio::time::{interval, Duration, Instant};
+use tokio::time::{interval, Duration};
 
 
 use crate::workers::model::{CacherTelemetry, WorkerSignal, Message};

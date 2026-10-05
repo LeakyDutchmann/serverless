@@ -1,5 +1,6 @@
 use wasmtime::{FuncType, ValType};
 use wasmtime::{Instance, Store};
+use super::core::CallerTable;
 
 pub fn validate_alloc(kind: FuncType) -> anyhow::Result<()> {
     let params: Vec<ValType> = kind.params().collect();
@@ -53,7 +54,7 @@ pub fn validate_main(kind: FuncType) -> anyhow::Result<()>  {
     Ok(())
 }
 
-pub fn validate_alloc_pointer(ptr: u32, instance: &Instance, mut store: &mut Store<()>) -> anyhow::Result<()> {
+pub fn validate_alloc_pointer(ptr: u32, instance: &Instance, mut store: &mut Store<CallerTable>) -> anyhow::Result<()> {
     if ptr == 0 {
         return Err(anyhow::anyhow!("Alloc call returned pointer which = 0"));
     }

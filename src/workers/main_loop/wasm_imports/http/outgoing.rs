@@ -1,4 +1,4 @@
-use wasi::http::types::{OutgoingRequest, Scheme,  OutgoingBody, IncomingResponse, IncomingBody, Fields, Method};
+use wasi::http::types::{OutgoingRequest, Scheme,  OutgoingBody, Fields, Method};
 use wasi::http::outgoing_handler;
 use wasmtime::{Linker, Caller};
 use crate::workers::main_loop::wasm_imports::model::TrailersHandle;
@@ -236,7 +236,7 @@ fn register_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
 }
 
 fn register_body_stream(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
-    linker.func_wrap("wasi:http/types", "outgoing-body.stream", |mut caller: Caller<'_, CallerTable>, body_handle: i32, ptr: i32, len: i32| -> i32 {
+    linker.func_wrap("wasi:http/types", "outgoing-body.stream", |mut caller: Caller<'_, CallerTable>, body_handle: i32| -> i32 {
         let handle = body_handle as u32;
         
         let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
@@ -288,8 +288,10 @@ fn register_append_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyh
         if let Some((_, _, trailers_handle)) = data.outgoing_body.get_mut(&handle) {
             if let Some(handle) = trailers_handle.handle {
                 if let Some(trailers) = data.outgoing_trailers.get_mut(&handle) {
-                    trailers.append(&name, val);
-                    return (0, 0);
+                    match trailers.append(&name, val) {
+                        Ok(_) => return (0, 0),
+                        Err(_) => return (1, 0),
+                    }
                 } else {
                     return (1, 0);
                 }

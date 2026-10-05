@@ -1,9 +1,4 @@
-use tokio_tungstenite::tungstenite::error::ProtocolError::WrongHttpMethod;
-use wasmtime::{Engine, Instance, Module, Store, Linker, Caller};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use rand::RngExt;
-use serde::Deserialize;
+use wasmtime::{Engine, Instance, Module, Store, Linker};
 
 use super::wasm_imports::model::{CallerTable, provide_imports};
 

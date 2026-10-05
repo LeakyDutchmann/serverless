@@ -69,10 +69,10 @@ fn register_finish_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
         let data = caller.data_mut();
         data.memory_usage.update(m_usage);
         
-        if let Some((body, mut stream_handle)) = data.incoming_body.remove(&handle) {
+        if let Some((body, stream_handle)) = data.incoming_body.remove(&handle) {
             if stream_handle.handle.is_some() {
                 if let Some(_) = data.input_streams.remove(&stream_handle.handle.unwrap()) {
-                    stream_handle.released = true;
+                    
                 } else {
                     return 0
                 }
