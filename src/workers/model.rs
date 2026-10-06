@@ -1,6 +1,8 @@
 use crate::scheduler::loops::gcc_loop::model::{BcastSender, GCCSignal};
+use crate::workers::metrics::model::MetricsPacket;
 use super::cache_manager::start_cache_loop;
 use super::main_loop::init::start_main_loop;
+use super::metrics::metrics_loop::start_metrics_loop;
 
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::Sender;
@@ -88,6 +90,11 @@ impl Worker {
             tl_tx.clone(),
             Arc::clone(&cache)
         ).await;
+        let (m_tx, m_rx) = tokio::sync::mpsc::channel::<(String, MetricsPacket)>(4096);
+        let metrics_loop = start_metrics_loop(
+            m_rx,
+            db_pool.clone(),
+        ).await;
         let task = start_main_loop(
             engine,
             db_pool,
@@ -97,6 +104,7 @@ impl Worker {
             Arc::clone(&jobs),
             id,
             rx,
+            m_tx,
         ).await;
         Worker {
             main_loop: task,

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::http::utils::get_function_name;
 use super::wasm_utils::run_wasm;
-use super::metrics::model::{MetricsPacket, update_metrics};
+use crate::workers::metrics::model::{MetricsPacket, update_metrics};
 use super::wasm_imports::model::CallerTable;
 use super::wasm_utils::create_wasm_instance;
 
