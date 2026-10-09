@@ -1,6 +1,7 @@
 use crate::workers::model::{Worker, WorkerSignal, Message, CacherTelemetry, WorkerId, WorkerLoad};
 use super::model::NEXT_JOB_ID;
 use super::loops::gcc_loop::model::{GCCSignal, BcastSender};
+use crate::scheduler::loops::metrics::model::MetricsPacket;
 
 use tokio::sync::mpsc::Sender;
 use sqlx::MySqlPool;
@@ -8,12 +9,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, atomic::Ordering};
 use tokio::sync::RwLock;
 
-pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>, l_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>) {
+pub async fn upgrade(workers: Arc<RwLock<Vec<Worker>>>, amount: usize, db_pool: MySqlPool, tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>, l_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>, m_tx: Sender<(String, MetricsPacket)>) {
     let mut workers = workers.write().await;
     let mut l_map = l_map.write().await;
     let last_id = workers.len();
     for id in last_id + 1..=last_id + amount {
-        let worker = Worker::spawn(id, db_pool.clone(), tx.clone(), tl_tx.clone(), gcc_tx.clone()).await;
+        let worker = Worker::spawn(id, db_pool.clone(), tx.clone(), tl_tx.clone(), gcc_tx.clone(), m_tx.clone()).await;
         workers.push(worker);
         l_map.insert(id, WorkerLoad::default());
     }

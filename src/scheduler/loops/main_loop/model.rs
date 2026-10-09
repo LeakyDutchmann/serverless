@@ -6,6 +6,7 @@ use crate::workers::model::WorkerLoad;
 
 use crate::scheduler::{types::SchedulerCommand, shutdown::Shutdown};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
+use crate::scheduler::loops::metrics::model::MetricsPacket;
 use super::feedback::handle_feedback;
 use super::job::handle_job;
 use super::load::handle_load;
@@ -37,6 +38,7 @@ pub async fn start_main_loop(
     next_worker: Arc<AtomicUsize>,
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
     shutdown_tx: Sender<Shutdown>,
+    m_tx: Sender<(String, MetricsPacket)>,
 ) -> JoinHandle<()> {
     let handle = tokio::spawn(async move {
         loop {
@@ -48,7 +50,7 @@ pub async fn start_main_loop(
                     handle_job(Arc::clone(&workers), Arc::clone(&next_worker), Arc::clone(&job_map), task);
                 }
                 Some(cmd) = load_rx.recv() => {
-                    handle_load(db_pool.clone(), &internal_channels, Arc::clone(&workers), Arc::clone(&load_map), gcc_tx.clone(), cmd).await;
+                    handle_load(db_pool.clone(), &internal_channels, Arc::clone(&workers), Arc::clone(&load_map), gcc_tx.clone(), cmd, m_tx.clone()).await;
                     
                 }
                 Some(tl_signal) = internal_channels.telemetry.rx.recv() => {

@@ -43,7 +43,7 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                                     continue;
                                 }
                             };
-                            let _ = map.insert(path.clone(), module);
+                            let _ = map.insert(func_name.clone(), module);
                             let _ = tl_tx.send(CacherTelemetry::ModuleCached { path: path.clone()}).await;
                         },
                         Ok(None) => {
@@ -55,7 +55,8 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                     };
                 }
                 GCCSignal::EvictModule { path } => {
-                    if let Some(_) = map.remove(&path) {
+                    let func_name = get_function_name(&path);
+                    if let Some(_) = map.remove(&func_name) {
                         let _ = tl_tx.send(CacherTelemetry::ModuleEvicted { path: path }).await;
                     }
                 }

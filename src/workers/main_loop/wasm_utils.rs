@@ -44,11 +44,16 @@ pub async fn run_wasm(instance: Instance, mut store: &mut Store<CallerTable>, in
     }
 }
 
-pub fn create_wasm_instance(engine: &Engine, wasm: &[u8], mut store: &mut Store<CallerTable>) -> anyhow::Result<Instance> {
-    let module = match Module::new(&engine, wasm) {
-        Ok(module) => module,
-        Err(e) => {
-            return Err(anyhow::anyhow!("Failed to create wasm module: {}", e));
+pub fn create_wasm_instance(engine: &Engine, wasm: &[u8], mut store: &mut Store<CallerTable>, module: Option<Module>) -> anyhow::Result<Instance> {
+    let module = 
+        if let Some(module) = module {
+            module
+        } else {
+            match Module::new(&engine, wasm) {
+            Ok(module) => module,
+            Err(e) => {
+                return Err(anyhow::anyhow!("Failed to create wasm module: {}", e));
+            }
         }
     };
     let mut linker = Linker::new(&engine);
@@ -58,7 +63,6 @@ pub fn create_wasm_instance(engine: &Engine, wasm: &[u8], mut store: &mut Store<
             return Err(anyhow::anyhow!("Failed to provide imports: {}", e));
         }
     }
-    
     let instance = match linker.instantiate(&mut store, &module) {
         Ok(instance) => instance,
         Err(e) => {

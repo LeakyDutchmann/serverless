@@ -10,7 +10,7 @@ use tokio::signal;
 #[tokio::main]
 async fn main() {
     let listener = TcpListener::bind("0.0.0.0:8080").await.expect("Failed to bind to port 8080");
-    let (tx, rx) = tokio::sync::mpsc::channel::<Job>(1024);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Job>(4096);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<Shutdown>(1024);
     dotenvy::dotenv().ok();
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -18,7 +18,7 @@ async fn main() {
     let db_pool = connect(&db_url, 10).await.expect("Failed to connect to a database, panicking!");
     
     //Start scheduler and spawn workers!
-    let mut scheduler = Scheduler::initialize(4, 20, rx, db_pool.clone(), shutdown_tx).await;
+    let mut scheduler = Scheduler::initialize(4, 40, rx, db_pool.clone(), shutdown_tx).await;
     scheduler.run().await;
     println!("Scheduler is running successfully");
 

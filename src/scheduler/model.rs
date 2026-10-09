@@ -5,6 +5,7 @@ use super::loops::load_loop::model::start_load_loop;
 use super::loops::hb_loop::model::start_hb_loop;
 use super::loops::gcc_loop::model::start_gcc_loop;
 use super::loops::main_loop::model::start_main_loop;
+use super::loops::metrics::metrics_loop::start_metrics_loop;
 use super::types::{Job, ModuleStats, InternalChannels, ExternalChannels, RuntimeTasks, SchedulerCommand};
 
 use tokio::{sync::mpsc::{Receiver, channel, Sender}, time::Instant};
@@ -53,7 +54,7 @@ impl Scheduler {
         
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
-            let worker = Worker::spawn(i, pool, int_channels.feedback.tx.clone(), int_channels.telemetry.tx.clone(), ext_channels.gcc_tx.clone().unwrap()).await;
+            let worker = Worker::spawn(i, pool, int_channels.feedback.tx.clone(), int_channels.telemetry.tx.clone(), ext_channels.gcc_tx.clone().unwrap(), ext_channels.metrics_tx.clone()).await;
             load_map.insert(i, WorkerLoad::default());
             workers.push(worker);
         }
@@ -94,7 +95,7 @@ impl Scheduler {
             self.ext_channels.job_rx.take().unwrap(),
             Arc::clone(&workers),
             load_rx,
-            db_pool,
+            db_pool.clone(),
             self.int_channels.take().unwrap(),
             gcc_tx.clone(),
             Arc::clone(&state.forbidden_paths),
@@ -102,17 +103,24 @@ impl Scheduler {
             Arc::clone(&next_worker),
             Arc::clone(&state.stats_map),
             self.ext_channels.shutdown_tx.take().unwrap(),
+            self.ext_channels.metrics_tx.clone()
         ).await;
         let gcc_loop = start_gcc_loop(Arc::clone(&workers), state.stats_map, state.forbidden_paths, cache_memory_usage, gcc_tx).await;
         let heartbeat_loop = start_hb_loop(load_tx.clone(), state.heartbeat_map).await;
         let max_workers = self.max_workers;
         let load_loop = start_load_loop(max_workers, load_tx, load_map).await;
 
+        let m_rx = self.ext_channels.metrics_rx.take().unwrap();
+        let metrics_loop = start_metrics_loop(
+            m_rx,
+            db_pool
+        );
         let tasks = RuntimeTasks {
             scheduler_task: main_loop,
             heartbeat_task: heartbeat_loop,
             load_task: load_loop,
             gcc_task: gcc_loop,
+            metrics_task: metrics_loop,
         };
         self.tasks = Some(tasks);
     }

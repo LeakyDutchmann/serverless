@@ -18,7 +18,7 @@ pub fn handle_job(
 ) {
     tokio::spawn(async move {
         let workers = workers.read().await;
-        let id = next_worker.fetch_add(1, Ordering::SeqCst);
+        let id = next_worker.fetch_add(1, Ordering::SeqCst) + 1;
         let id = if id == 0{
             next_worker.store(1, Ordering::SeqCst);
             1

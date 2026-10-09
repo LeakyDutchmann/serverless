@@ -57,18 +57,18 @@ pub async fn handle_feedback(
                 if let Some(load) = load_map.get_mut(&w_id) {
                     if load.task_count != 0 {
                         load.task_count -= 1;
-                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
+                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason.clone()));
                         send(stream, &response).await;
-                        println!("Worker {} failed task {}", w_id, j_id);
+                        println!("Worker {} failed task {} : Reason: {}", w_id, j_id, reason);
                     } else {
-                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
+                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason.clone()));
                         send(stream, &response).await;
-                        println!("Worker {} failed untracked task", w_id);
+                        println!("Worker {} failed untracked task, reason: {}", w_id, reason);
                     }      
                 } else {
-                    let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason));
+                    let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason.clone()));
                     send(stream, &response).await;
-                    println!("Worker {} failed untracked task", w_id);
+                    println!("Worker {} failed untracked task, reason: {}", w_id, reason);
                 }
                 job_map.remove(&j_id);
             } else {

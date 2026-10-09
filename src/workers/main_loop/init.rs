@@ -11,7 +11,7 @@ use tokio::time::{interval, Duration};
 
 use crate::workers::model::{CacherTelemetry, WorkerSignal, Message};
 use super::handler::handle_job;
-use crate::workers::metrics::model::MetricsPacket;
+use crate::scheduler::loops::metrics::model::MetricsPacket;
 
 pub async fn start_main_loop(
     engine: Engine,
@@ -25,21 +25,9 @@ pub async fn start_main_loop(
     m_tx: Sender<(String, MetricsPacket)>,
 ) -> JoinHandle<()> {
     let mut heartbeat = interval(Duration::from_secs(3));
-    let mut metrics_dead_line = interval(Duration::from_secs(120));
     tokio::spawn(async move {
         let engine = engine.clone();
-        let metrics: Arc<RwLock<HashMap<String, MetricsPacket>>> = Arc::new(RwLock::new(HashMap::new()));
         loop {
-            //metrics len based flush 
-            let mut map = metrics.write().await;
-            if map.len() > 25 {
-                for (path, metrics) in map.iter() {
-                    let _ = m_tx.send((path.clone(), metrics.clone())).await;
-                }
-                map.clear();
-            }
-            drop(map);
-            
             let engine = engine.clone();
             let db = db_pool.clone();
             let fb = fb_tx.clone();
@@ -60,15 +48,20 @@ pub async fn start_main_loop(
                         },
                         Message::Job{path, input, j_id} => {
                             let cache_map = Arc::clone(&cache);
-                            let metrics_map = Arc::clone(&metrics);
+                            let tx = m_tx.clone();
                             let job = tokio::spawn(async move {
                                 let _ = fb.send(WorkerSignal::Working{w_id: id, j_id}).await;
-                                match handle_job(path.clone(), engine, cache_map, &input, db, metrics_map).await {
-                                    Ok(result) => {
+                                println!("Handling job {}", j_id);
+                                match handle_job(path.clone(), engine, cache_map, &input, db).await {
+                                    Ok((result, metrics)) => {
                                         let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result}).await;
+                                        let _ = tx.send((path.clone(), metrics)).await;
                                     },
                                     Err(e) => {
-                                        let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.to_string()}).await;
+                                        if let Some(metrics) = e.metrics {
+                                            let _ = tx.send((path.clone(), metrics)).await;
+                                        }
+                                        let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.message}).await;
                                     }
                                 }
                                 let _ = tl.send(CacherTelemetry::ModuleUsed{path}).await;
@@ -94,13 +87,6 @@ pub async fn start_main_loop(
                     }
                     let mut jobs = jobs.write().await;
                     jobs.retain(|j| !j.is_finished())
-                }
-                _ = metrics_dead_line.tick() => {
-                    let mut map = metrics.write().await;
-                    for (path, metrics) in map.iter_mut() {
-                        let _ = m_tx.send((path.clone(), metrics.clone())).await;
-                    }
-                    map.clear();
                 }
             }
         }

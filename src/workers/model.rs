@@ -1,8 +1,8 @@
 use crate::scheduler::loops::gcc_loop::model::{BcastSender, GCCSignal};
-use crate::workers::metrics::model::MetricsPacket;
+use crate::scheduler::loops::metrics::model::MetricsPacket;
 use super::cache_manager::start_cache_loop;
 use super::main_loop::init::start_main_loop;
-use super::metrics::metrics_loop::start_metrics_loop;
+
 
 use tokio::task::JoinHandle;
 use tokio::sync::mpsc::Sender;
@@ -68,7 +68,7 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>) -> Self {
+    pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>, m_tx: Sender<(String, MetricsPacket)>) -> Self {
         let (tx, rx) = channel::<Message>(1024);
         let cache: Arc<RwLock<HashMap<String, Module>>> = Arc::new(RwLock::new(HashMap::new()));
         let jobs: Arc<RwLock<Vec<JoinHandle<()>>>> = Arc::new(RwLock::new(Vec::new()));
@@ -89,11 +89,6 @@ impl Worker {
             gcc_tx,
             tl_tx.clone(),
             Arc::clone(&cache)
-        ).await;
-        let (m_tx, m_rx) = tokio::sync::mpsc::channel::<(String, MetricsPacket)>(4096);
-        let metrics_loop = start_metrics_loop(
-            m_rx,
-            db_pool.clone(),
         ).await;
         let task = start_main_loop(
             engine,
