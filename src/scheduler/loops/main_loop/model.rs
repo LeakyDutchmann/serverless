@@ -4,7 +4,7 @@ use crate::workers::model::WorkerId;
 use crate::workers::model::WorkerLoad;
 
 
-use crate::scheduler::{types::SchedulerCommand, shutdown::Shutdown};
+use crate::scheduler::{types::{SchedulerCommand, JobResult}, shutdown::Shutdown};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
 use crate::scheduler::loops::metrics::model::MetricsPacket;
 use super::feedback::handle_feedback;
@@ -16,7 +16,7 @@ use super::telemetry::handle_telemetry;
 use tokio::{sync::mpsc::{Receiver, Sender}, time::Instant};
 use sqlx::MySqlPool;
 use tokio::task::JoinHandle;
-use tokio::net::TcpStream;
+use tokio::sync::oneshot::Sender as OneShotSender;
 use tokio::select;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::AtomicUsize};
@@ -25,7 +25,7 @@ use tokio::sync::RwLock;
 
 pub async fn start_main_loop(
     load_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
-    job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
+    job_map: Arc<RwLock<HashMap<usize, OneShotSender<JobResult>>>>,
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     mut job_rx: Receiver<Job>,
     workers: Arc<RwLock<Vec<Worker>>>,

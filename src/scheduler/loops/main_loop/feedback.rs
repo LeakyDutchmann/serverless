@@ -1,14 +1,15 @@
 use crate::workers::model::{{WorkerSignal, WorkerId, WorkerLoad}};
 use crate::http::response::{Response, StatusCode, send};
+use crate::scheduler::types::JobResult;
 
 use tokio::time::Instant;
-use tokio::net::TcpStream;
+use tokio::sync::oneshot::Sender as OneShotSender;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub async fn handle_feedback(
-    job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
+    job_map: Arc<RwLock<HashMap<usize, OneShotSender<JobResult>>>>,
     load_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>, 
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     signal: WorkerSignal
@@ -30,21 +31,18 @@ pub async fn handle_feedback(
             }
         }
         WorkerSignal::Finished {w_id, j_id, result} => {
-            if let Some(stream) = job_map.get_mut(&j_id) {
+            if let Some(tx) = job_map.remove(&j_id) {
                 if let Some(load) = load_map.get_mut(&w_id) {
                     if load.task_count != 0 {
                         load.task_count -= 1;
                         println!("Worker {} finished task {}", w_id, j_id);
-                        let response = Response::json(StatusCode::Ok, result, None);
-                        send(stream, &response).await;
+                        tx.send(JobResult::from_ok(result));
                     } else {
-                        let response = Response::json(StatusCode::Ok, result, None);
-                        send(stream, &response).await;
+                        tx.send(JobResult::from_ok(result));
                         println!("Worker {} finished untracked task", w_id);
                     }      
                 } else {
-                    let response = Response::json(StatusCode::Ok, result, None);
-                    send(stream, &response).await;
+                    tx.send(JobResult::from_ok(result));
                     println!("Worker {} finished untracked task", w_id);
                 }  
                 job_map.remove(&j_id);
@@ -53,24 +51,20 @@ pub async fn handle_feedback(
             }     
         }
         WorkerSignal::Failed {w_id, j_id, reason} => {
-            if let Some(stream) = job_map.get_mut(&j_id) {
+            if let Some(tx) = job_map.remove(&j_id) {
                 if let Some(load) = load_map.get_mut(&w_id) {
                     if load.task_count != 0 {
                         load.task_count -= 1;
-                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason.clone()));
-                        send(stream, &response).await;
+                        tx.send(JobResult::server_err(reason.clone()));
                         println!("Worker {} failed task {} : Reason: {}", w_id, j_id, reason);
                     } else {
-                        let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason.clone()));
-                        send(stream, &response).await;
+                        tx.send(JobResult::server_err(reason.clone()));
                         println!("Worker {} failed untracked task, reason: {}", w_id, reason);
                     }      
                 } else {
-                    let response = Response::json(StatusCode::IntServerError, Vec::new(), Some(reason.clone()));
-                    send(stream, &response).await;
+                    tx.send(JobResult::server_err(reason.clone()));
                     println!("Worker {} failed untracked task, reason: {}", w_id, reason);
                 }
-                job_map.remove(&j_id);
             } else {
                 println!("Worker {} failed task that belongs to no client. Task id: {}, reason {}", w_id, j_id, reason);
             }   

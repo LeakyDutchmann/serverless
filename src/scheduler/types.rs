@@ -7,11 +7,30 @@ use super::shutdown::Shutdown;
 use tokio::{sync::mpsc::{Receiver, Sender}, time::Instant};
 use tokio::task::JoinHandle;
 use tokio::net::TcpStream;
+use tokio::sync::oneshot::Sender as OneShotSender;
+
+pub enum JobResult {
+    Ok{result: Vec<u8>},
+    BadRequest{reason: String},
+    ServerErr{reason: String}
+}
+
+impl JobResult {
+    pub fn bad_request(reason: String) -> Self {
+        JobResult::BadRequest{reason}
+    }
+    pub fn server_err(reason: String) -> Self {
+        JobResult::ServerErr{reason}
+    }
+    pub fn from_ok(result: Vec<u8>) -> Self {
+        JobResult::Ok{result}
+    }
+}
 
 pub struct Job {
     pub path: String,
     pub input: Vec<u8>,
-    pub stream: TcpStream,
+    pub respond_to: OneShotSender<JobResult>,
 }
 
 pub enum SchedulerCommand {

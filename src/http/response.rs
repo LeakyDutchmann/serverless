@@ -9,26 +9,53 @@ pub enum StatusCode {
     BadRequest,
 }
 
+impl StatusCode {
+    fn as_str(&self) -> &str {
+        match &self {
+            StatusCode::BadRequest => {
+                "HTTP/1.1 400 Bad Request"
+            },
+            StatusCode::IntServerError => {
+                "HTTP/1.1 500 Internal Server Error"
+            },
+            StatusCode::NotFound => {
+                "HTTP/1.1 404 Not Found"
+            },
+            StatusCode::Ok => {
+                "HTTP/1.1 200 Ok"
+            },
+            StatusCode::Unauthorized => {
+                "HTTP/1.1 401 Unauthorized"
+            }
+        }
+    }
+}
+
 
 pub struct Response {
-    pub resp: String,
+    pub status: StatusCode,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
 }
 
 impl Response {
-    pub fn json(status: StatusCode, result: Vec<u8>, reason: Option<String>) -> Response {
-        let status_line = match status {
-            StatusCode::Ok => "HTTP/1.1 200 Ok",
-            StatusCode::NotFound => "HTTP/1.1 404 Not Found",
-            StatusCode::IntServerError => "HTTP/1.1 500 Internal Server Error",
-            StatusCode::Unauthorized => "HTTP/1.1 401 Unauthorized",
-            StatusCode::BadRequest => "HTTP/1.1 400 Bad Request",
-        };
+    pub fn new(status: StatusCode, result: Vec<u8>, reason: Option<String>, keep_alive: bool) -> Response {
         if let Some(reason) = reason {
             let reason_js = serde_json::json!({"reason": reason}).to_string();
             let len = reason_js.len();
-            let line = format!("{}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}", status_line, len, reason_js);
+            let mut headers = Vec::new();
+            headers.push(("Content-Length".to_string(), format!("{}", len)));
+            headers.push(("Content-Type".to_string(), "application/json".to_string()));
+            if keep_alive {
+                headers.push((format!("Connection"), format!("keep-alive")));
+                headers.push((format!("Keep-Alive"), format!("timeout=5, max=100")));
+            } else {
+                headers.push((format!("Connection"), format!("close")));
+            }
             Response {
-                resp: line,
+                status,
+                headers,
+                body: reason_js.as_bytes().to_vec()
             }
         } else {
             let body = serde_json::json!({
@@ -36,15 +63,38 @@ impl Response {
             });
             let body = body.to_string();
             let len = body.len();
-            let line = format!("{}\r\nContent-Length: {}\r\nContent-Type: application/json\r\n\r\n{}", status_line, len, body);
+            let mut headers = Vec::new();
+            headers.push(("Content-Length".to_string(), format!("{}", len)));
+            headers.push(("Content-Type".to_string(), "application/json".to_string()));
+            if keep_alive {
+                headers.push((format!("Connection"), format!("keep-alive")))
+            } else {
+                headers.push((format!("Connection"), format!("close")))
+            }
             Response {
-                resp: line,
+                status,
+                headers,
+                body: body.as_bytes().to_vec()
             }
         }
     }
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let status_line = &self.status.as_str();
+        let mut line = format!("{}\r\n", status_line);
+        for (header, val) in &self.headers {
+            let n_h = header.to_owned() + ": " + val + "\r\n";
+            line += &n_h;
+        }
+        line += "\r\n";
+        
+        let mut headers = line.as_bytes().to_vec();
+        headers.extend_from_slice(&self.body.as_slice());
+        headers
+    }
 }
 
-pub async fn send(stream: &mut TcpStream, response: &Response) {
-    let _ = stream.write_all(response.resp.as_bytes()).await;
-    let _ = stream.flush().await;
+pub async fn send(stream: &mut TcpStream, response: &Response) -> anyhow::Result<()> {
+    stream.write_all(response.as_bytes().as_slice()).await?;
+    stream.flush().await?;
+    Ok(())
 }

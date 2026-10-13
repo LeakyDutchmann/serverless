@@ -1,23 +1,22 @@
 use crate::workers::model::{Worker, WorkerId, WorkerLoad};
-
 use super::shutdown::Shutdown;
 use super::loops::load_loop::model::start_load_loop;
 use super::loops::hb_loop::model::start_hb_loop;
 use super::loops::gcc_loop::model::start_gcc_loop;
 use super::loops::main_loop::model::start_main_loop;
 use super::loops::metrics::metrics_loop::start_metrics_loop;
-use super::types::{Job, ModuleStats, InternalChannels, ExternalChannels, RuntimeTasks, SchedulerCommand};
+use super::types::{Job, ModuleStats, InternalChannels, ExternalChannels, RuntimeTasks, SchedulerCommand, JobResult};
 
 use tokio::{sync::mpsc::{Receiver, channel, Sender}, time::Instant};
 use sqlx::MySqlPool;
-use tokio::net::TcpStream;
+use tokio::sync::oneshot::Sender as OneShotSender;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::{AtomicUsize}};
 use tokio::sync::RwLock;
 
 struct RuntimeState {
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
-    job_map: Arc<RwLock<HashMap<usize, TcpStream>>>,
+    job_map: Arc<RwLock<HashMap<usize, OneShotSender<JobResult>>>>,
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>
 }
