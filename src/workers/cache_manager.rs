@@ -16,12 +16,12 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
     tokio::spawn(async move {
         let mut rx = gcc_tx.subscribe();
         while let Ok(signal) = rx.recv().await {
-            let mut map = cache.write().await;
             match signal {
                 GCCSignal::CacheModule { path } => {
-                    if map.contains_key(&path) {
+                    if cache.read().await.contains_key(&path) {
                         continue;
                     }
+                    
                     let func_name = get_function_name(&path);
                     let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
                         .bind(&func_name)
@@ -43,7 +43,7 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                                     continue;
                                 }
                             };
-                            let _ = map.insert(func_name.clone(), Arc::new(module));
+                            let _ = cache.write().await.insert(func_name.clone(), Arc::new(module));
                             let _ = tl_tx.send(CacherTelemetry::ModuleCached { path: path.clone()}).await;
                         },
                         Ok(None) => {
@@ -56,7 +56,7 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                 }
                 GCCSignal::EvictModule { path } => {
                     let func_name = get_function_name(&path);
-                    if let Some(_) = map.remove(&func_name) {
+                    if let Some(_) = cache.write().await.remove(&func_name) {
                         let _ = tl_tx.send(CacherTelemetry::ModuleEvicted { path: path }).await;
                     }
                 }
