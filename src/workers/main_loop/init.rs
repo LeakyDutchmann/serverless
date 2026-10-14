@@ -51,7 +51,6 @@ pub async fn start_main_loop(
                             let tx = m_tx.clone();
                             let job = tokio::spawn(async move {
                                 let _ = fb.send(WorkerSignal::Working{w_id: id, j_id}).await;
-                                println!("Handling job {}", j_id);
                                 match handle_job(path.clone(), engine, cache_map, &input, db).await {
                                     Ok((result, metrics)) => {
                                         let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result}).await;

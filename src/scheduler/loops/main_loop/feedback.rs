@@ -25,7 +25,7 @@ pub async fn handle_feedback(
             if let Some(load) = load_map.get_mut(&w_id) {
                 load.task_count += 1;
                 load.last_task_time = Instant::now();
-                println!("Worker {} started task {}", w_id, j_id);
+                // println!("Worker {} started task {}", w_id, j_id);
             } else {
                 load_map.insert(w_id, WorkerLoad { task_count: 1, last_task_time: Instant::now() });
             }
@@ -35,15 +35,15 @@ pub async fn handle_feedback(
                 if let Some(load) = load_map.get_mut(&w_id) {
                     if load.task_count != 0 {
                         load.task_count -= 1;
-                        println!("Worker {} finished task {}", w_id, j_id);
+                        // println!("Worker {} finished task {}", w_id, j_id);
                         tx.send(JobResult::from_ok(result));
                     } else {
                         tx.send(JobResult::from_ok(result));
-                        println!("Worker {} finished untracked task", w_id);
+                        // println!("Worker {} finished untracked task", w_id);
                     }      
                 } else {
                     tx.send(JobResult::from_ok(result));
-                    println!("Worker {} finished untracked task", w_id);
+                    // println!("Worker {} finished untracked task", w_id);
                 }  
                 job_map.remove(&j_id);
             } else {

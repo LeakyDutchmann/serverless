@@ -15,33 +15,37 @@ pub async fn start_load_loop(
     l_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
 ) -> JoinHandle<()> {
     let handle = tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(3));
+        let mut interval = interval(Duration::from_secs(1));
         let max_workers = max_workers;
         loop {
             interval.tick().await;
             let map = l_map.read().await;
             let workers = map.len();
             let mut busy_workes: Vec<(usize, usize)> = Vec::with_capacity(map.len());
+            let mut future_workers = workers;
             for (id, load) in map.iter() {
+                // println!("load of {} is {}", id, load.task_count);
                 if load.task_count >= 4 {
                     busy_workes.push((*id, load.task_count));
                 }
-                if workers > 4 {
+                
+                if future_workers > 4 {
                     if load.task_count == 0 {
                         if Instant::now().duration_since(load.last_task_time) > Duration::from_secs(30) {
                             let _ = load_tx.send(SchedulerCommand::Downgrade(*id)).await;
+                            future_workers -= 1;
                             println!("Sent downgrade command");  
                         }    
                     }
                 }
             }
+            println!("busy workers: {}", busy_workes.len());
             if busy_workes.len() as f64 >= map.len() as f64 * 0.75 {
                 if map.len() + 4 <= max_workers {
                     let _ = load_tx.send(SchedulerCommand::Upgrade(4)).await;
                     println!("Sent upgrade command");
                     continue; 
                 }
-                
             }
             
         }

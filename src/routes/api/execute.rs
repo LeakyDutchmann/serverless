@@ -13,7 +13,7 @@ pub async fn execute(buffer: &[u8], path: &str, j_tx: Sender<Job>, keep_alive: b
             let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to get input: {}", e)), keep_alive);
             return response;
         }
-    };
+    };   
     let result: Result<serde_json::Value, serde_json::Error> = if input.is_empty() {
         Ok(serde_json::json!({}))
     } else {

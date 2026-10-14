@@ -23,7 +23,6 @@ pub async fn handle_telemetry(
     shutdown_tx: Sender<Shutdown>,
 )  {
     tokio::spawn(async move {
-        println!("memory usage: {}", cache_memory_usage.load(std::sync::atomic::Ordering::SeqCst));
         let mut map = stats_map.write().await;
         let _f_map = forbidden_paths.write().await;
         let instant = Instant::now();

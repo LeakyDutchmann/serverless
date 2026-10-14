@@ -56,7 +56,6 @@ pub async fn handle_job(
                 return Err(result);
             }
         };
-        println!("Warm start");
         match run_wasm(instance, &mut store, &input).await {
             Ok(result) => {
                 let packet = MetricsPacket::new(handling_started, &store, fuel_init, false, true);
@@ -88,7 +87,6 @@ pub async fn handle_job(
                         return Err(result);
                     }
                 };
-                println!("Cold start");
                 match run_wasm(instance, &mut store, &input).await {
                     Ok(result) => {
                         let packet = MetricsPacket::new(handling_started, &store, fuel_init, true, true);

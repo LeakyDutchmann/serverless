@@ -27,7 +27,6 @@ pub fn start_metrics_loop(
             
             select! {
                 Some((path, metrics)) = rx.recv() => {
-                    println!("Metrics: received record for path: {}", path);
                     let mut map = queue.write().await;
                     if let Some(record) = map.get_mut(&path) {
                         update_record(record, metrics);

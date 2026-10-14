@@ -45,6 +45,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
         } else {
             let len = get_body_len(&headers_str);
             if len.is_none() {
+                println!("No body len provided");
                 let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Mailformed request: no body length defined")), keep_alive);
                 send(&mut stream, &response).await;
                 return;
@@ -65,6 +66,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
                 }
                 buffer
             } else {
+                println!("Body len is 0");
                 return;
             }
         };
@@ -77,7 +79,6 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
                     if path.starts_with("/functions") {
                         deploy(&body, &path, &db_pool, &wasm_engine, keep_alive).await
                     } else if path.starts_with("/invoke") {
-                        println!("Executing function...");
                         execute(&buffer, &path, tx.clone(), keep_alive).await
                     } else {
                         break_reason = format!("Invalid Request: {}, {}", method, path);

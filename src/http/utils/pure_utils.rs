@@ -12,17 +12,13 @@ pub fn find_headers_end(buf: &[u8]) -> Option<usize> {
 }
 
 pub fn get_body_len(string_buffer: &str) -> Option<usize> {
-    let lines: Vec<String> = string_buffer.lines().map(|l| l.to_string()).collect();
-    for line in lines {
-        if line.starts_with("Content-Length") {
-            let parts: Vec<&str> = line.split(":").collect();
-            if parts.len() == 2 {
-                let result = usize::from_str_radix(parts[1].trim(), 10);
-                if let Ok(len) = result {
-                    return Some(len);
-                } else {
-                    let err = result.err().unwrap();
-                    println!("Failedd to parse content-length: {}", err);
+    for line in string_buffer.lines() {
+        let Some((name, val)) = line.split_once(":") else {continue};
+        if name.trim().eq_ignore_ascii_case("Content-Length") {
+            match val.trim().parse::<usize>() {
+                Ok(len) => return Some(len),
+                Err(err) => {
+                    println!("Failed to parse Content-Length: {}", err);
                     return None;
                 }
             }

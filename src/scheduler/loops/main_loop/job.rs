@@ -20,11 +20,11 @@ pub fn handle_job(
         let workers = workers.read().await;
         let id = next_worker.fetch_add(1, Ordering::SeqCst) + 1;
         let id = if id == 0{
-            next_worker.store(1, Ordering::SeqCst);
-            1
+            next_worker.store(workers[0].id, Ordering::SeqCst);
+            workers[0].id
         } else if id > workers.len() {
-            next_worker.store(1, Ordering::SeqCst);
-            1
+            next_worker.store(workers[0].id, Ordering::SeqCst);
+            workers[0].id
         } else {
             id
         };
