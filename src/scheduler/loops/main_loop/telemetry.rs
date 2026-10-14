@@ -23,64 +23,76 @@ pub async fn handle_telemetry(
     shutdown_tx: Sender<Shutdown>,
 )  {
     tokio::spawn(async move {
-        let mut map = stats_map.write().await;
         let _f_map = forbidden_paths.write().await;
         let instant = Instant::now();
         match tl_signal {
             CacherTelemetry::ModuleCached{path} => {
+                let mut map = stats_map.write().await;
+                let map_len = map.len(); 
+                
                 if let Some(stats) = map.get_mut(&path) {
                     stats.cached_instances += 1;
-                    cache_memory_usage.fetch_add(stats.memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
+                    cache_memory_usage.fetch_add(stats.memory_usage as usize, std::sync::atomic::Ordering::Relaxed);
                     println!("Module cached: {}, memory_usage: {}", path, stats.memory_usage);
-                } else {
-                    let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
-                        .bind(path.clone())
-                        .fetch_optional(&db_pool)
-                        .await;
-                    match result {
-                        Ok(Some(row)) => {
-                            let memory_usage: i32 = match row.try_get("memory_usage") {
-                                Ok(memory_usage) => memory_usage,
-                                Err(e) => {
-                                    println!("CACHING: Failed to fetch memory usage for module: {}, error: {}", path, e);
-                                    return;
-                                },
-                            }; 
-                            if memory_usage < 0 {
-                                println!("CACHING: Module on path {} requires negative amount of memory: {}", path, memory_usage);
+                    return;
+                }  
+                drop(map);
+
+                let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
+                    .bind(path.clone())
+                    .fetch_optional(&db_pool)
+                    .await;
+                match result {
+                    Ok(Some(row)) => {
+                        let memory_usage: i32 = match row.try_get("memory_usage") {
+                            Ok(memory_usage) => memory_usage,
+                            Err(e) => {
+                                println!("CACHING: Failed to fetch memory usage for module: {}, error: {}", path, e);
                                 return;
-                            }
-                            if map.len() < MAX_STATS_ENTRIES {
-                                map.insert(path.clone(), ModuleStats {
-                                    first_invocation: instant,
-                                    invokations: 1,
-                                    last_invocation: instant,
-                                    pre_last_invocation: None,
-                                    last_eviction: None,
-                                    cached_instances: 1,
-                                    memory_usage: memory_usage as usize,
-                                });
-                                cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::SeqCst);
-                                println!("CACHING: Added module on path: {}, memory_usage: {}", path, memory_usage);
-                            }
-            
+                            },
+                        }; 
+                        if memory_usage < 0 {
+                            println!("CACHING: Module on path {} requires negative amount of memory: {}", path, memory_usage);
+                            return;
                         }
-                        Ok(None) => {
-                            println!("CACHING: Failed to look up module at path: {}, MODULE NOT FOUND", path);
+                        
+
+                       
+                        if map_len < MAX_STATS_ENTRIES {
+                            let mut map = stats_map.write().await;
+                            map.insert(path.clone(), ModuleStats {
+                                first_invocation: instant,
+                                invokations: 1,
+                                last_invocation: instant,
+                                pre_last_invocation: None,
+                                last_eviction: None,
+                                cached_instances: 1,
+                                memory_usage: memory_usage as usize,
+                            });
+                            cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::Relaxed);
+                            println!("CACHING: Added module on path: {}, memory_usage: {}", path, memory_usage);
+                        } else {
+                            //Probably want to implement some queue
                         }
-                        Err(e) => {
-                            println!("CACHING: Failed to look up module at path: {}, {}", path, e);
-                        }
-                    }      
-                }
+        
+                    }
+                    Ok(None) => {
+                        println!("CACHING: Failed to look up module at path: {}, MODULE NOT FOUND", path);
+                    }
+                    Err(e) => {
+                        println!("CACHING: Failed to look up module at path: {}, {}", path, e);
+                    }
+                }  
+                
             },
             CacherTelemetry::ModuleEvicted{path} => {
+                let mut map = stats_map.write().await;
                 if let Some(stats) = map.get_mut(&path) {
                     stats.last_eviction = Some(instant);
                     stats.cached_instances -= 1;
-                    let current = cache_memory_usage.load(std::sync::atomic::Ordering::SeqCst);
+                    let current = cache_memory_usage.load(std::sync::atomic::Ordering::Relaxed);
                     if stats.memory_usage <= current {
-                        cache_memory_usage.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::SeqCst);
+                        cache_memory_usage.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::Relaxed);
                     } else {
                         //Shutdown because when program thinks that it uses less memory than it does - it's bad
                         let _ = shutdown_tx.send(Shutdown{reason: format!("Inconsistent memory usage counter. Using less memory than expected. Using: {}, expected min: {}", current, stats.memory_usage), instant: tokio::time::Instant::now()}).await;
@@ -91,48 +103,55 @@ pub async fn handle_telemetry(
                 }
             },
             CacherTelemetry::ModuleUsed{path} => {
+                let mut map = stats_map.write().await;
+                let map_len = map.len();
+                
                 if let Some(stats) = map.get_mut(&path) {
                     stats.invokations += 1;
                     stats.pre_last_invocation = Some(stats.last_invocation);
                     stats.last_invocation = instant;
-                } else {
-                    let func_name = get_function_name(&path);
-                    let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
-                        .bind(func_name)
-                        .fetch_optional(&db_pool)
-                        .await;
-                    match result {
-                        Ok(Some(row)) => {
-                            let memory_usage: i32 = match row.try_get("memory_usage") {
-                                Ok(memory_usage) => memory_usage,
-                                Err(e) => {
-                                    println!("CACHINGSTATS: Failed to fetch memory usage for module: {}, error: {}", path, e);
-                                    return;
-                                },
-                            }; 
-                            if memory_usage < 0 {
-                                println!("CACHINGSTATS: Module on path {} requires negative amount of memory: {}", path, memory_usage);
+                    return;
+                }
+                drop(map);
+                
+                let func_name = get_function_name(&path);
+                let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
+                    .bind(func_name)
+                    .fetch_optional(&db_pool)
+                    .await;
+                match result {
+                    Ok(Some(row)) => {
+                        let memory_usage: i32 = match row.try_get("memory_usage") {
+                            Ok(memory_usage) => memory_usage,
+                            Err(e) => {
+                                println!("CACHINGSTATS: Failed to fetch memory usage for module: {}, error: {}", path, e);
                                 return;
-                            }
-                            if map.len() < MAX_STATS_ENTRIES {
-                                map.insert(path.clone(), ModuleStats {
-                                    invokations: 1,
-                                    first_invocation: instant,
-                                    last_invocation: instant,
-                                    pre_last_invocation: None,
-                                    last_eviction: None,
-                                    cached_instances: 0,
-                                    memory_usage: memory_usage as usize,
-                                });
-                            }
-                        }                    
-                        Ok(None) => {
-                            println!("CACHINGSTATS: Failed to look up module at path: {}, MODULE NOT FOUND", path);
+                            },
+                        }; 
+                        if memory_usage < 0 {
+                            println!("CACHINGSTATS: Module on path {} requires negative amount of memory: {}", path, memory_usage);
+                            return;
                         }
-                        Err(e) => {
-                            println!("CACHINGSTATS: Failed to look up module at path: {}, {}", path, e);
+                        
+                        if map_len < MAX_STATS_ENTRIES {
+                            let mut map = stats_map.write().await;
+                            map.insert(path.clone(), ModuleStats {
+                                invokations: 1,
+                                first_invocation: instant,
+                                last_invocation: instant,
+                                pre_last_invocation: None,
+                                last_eviction: None,
+                                cached_instances: 0,
+                                memory_usage: memory_usage as usize,
+                            });
                         }
-                    }  
+                    }                    
+                    Ok(None) => {
+                        println!("CACHINGSTATS: Failed to look up module at path: {}, MODULE NOT FOUND", path);
+                    }
+                    Err(e) => {
+                        println!("CACHINGSTATS: Failed to look up module at path: {}, {}", path, e);
+                    }
                 }
             },
             CacherTelemetry::FailedToCache{path, error} => {    

@@ -108,6 +108,7 @@ impl<T> Channel<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct ModuleStats {
     pub memory_usage: usize,
     pub invokations: u64,
