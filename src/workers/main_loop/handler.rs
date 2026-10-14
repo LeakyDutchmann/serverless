@@ -17,6 +17,15 @@ pub struct JobHandlingError {
     pub metrics: Option<MetricsPacket>,
 }
 
+struct JobContext<'a> {
+    engine: &'a Engine,
+    store: &'a mut Store<CallerTable>,
+    handling_started: Instant,
+    fuel_init: u64,
+    cold_start: bool,
+    input: &'a [u8],
+}
+
 impl JobHandlingError {
     pub fn full(message: String, handling_started: Instant, store: &Store<CallerTable>, fuel_init: u64, cold: bool, success: bool) -> Self {
         let m = MetricsPacket::new(handling_started, &store, fuel_init, cold, success);
@@ -30,15 +39,15 @@ impl JobHandlingError {
 pub async fn handle_job(
     path: String,
     engine: Engine,
-    cache_map: Arc<RwLock<HashMap<String, Module>>>,
+    cache_map: Arc<RwLock<HashMap<String, Arc<Module>>>>,
     input: &[u8],
     db_pool: MySqlPool,
 ) -> Result<(Vec<u8>, MetricsPacket), JobHandlingError>{
     //metrics part...
     let fuel_init = 10_000;
     let handling_started = Instant::now();
-    let c_map = cache_map.read().await;
     let func_name = get_function_name(&path);
+    
     let mut store = Store::new(&engine, CallerTable::new());
     match store.set_fuel(fuel_init) {
         Ok(_) => {}
@@ -47,65 +56,56 @@ pub async fn handle_job(
             return Err(result);
         }
     };
-    if let Some(module) = c_map.get(&func_name) {
-        let instance = match create_wasm_instance(&engine, &[], &mut store, Some(module.clone())) {
-            Ok(instance) => instance,
-            Err(e) => {
-                println!("Failed to create instance wasm module: {}", e);
-                let result = JobHandlingError::full(e.to_string(), handling_started, &store, fuel_init, false, false);
-                return Err(result);
-            }
-        };
-        match run_wasm(instance, &mut store, &input).await {
-            Ok(result) => {
-                let packet = MetricsPacket::new(handling_started, &store, fuel_init, false, true);
-                return Ok((result, packet));
-            }
-            Err(e) => {
-                let result = JobHandlingError::full(e.to_string(), handling_started, &store, fuel_init, false, false);
-                return Err(result);
-            }
+    let module = {
+        let map = cache_map.read().await;
+        map.get(&func_name).cloned()
+    };
+
+    let mut ctx = JobContext {
+        engine: &engine,
+        store: &mut store, 
+        handling_started,
+        fuel_init,
+        cold_start: module.is_none(),
+        input
+    };
+    
+    if let Some(module) = module {
+        return instantiate_and_run(&mut ctx, Some(module), None).await;
+    }
+
+    let row = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
+        .bind(&func_name)
+        .fetch_optional(&db_pool)
+        .await
+        .map_err(|e| JobHandlingError::partial(e.to_string()))?;
+
+    let Some(row) = row else { return Err(JobHandlingError::partial("Not found in database".to_string()))};
+    let wasm: Vec<u8> = row.try_get("wasm")
+        .map_err(|e| JobHandlingError::full(
+            e.to_string(), handling_started, &ctx.store, fuel_init, ctx.cold_start, false
+    ))?;
+    
+    
+    instantiate_and_run(&mut ctx, None, Some(&wasm)).await 
+}
+
+async fn instantiate_and_run(ctx: &mut JobContext<'_>, module: Option<Arc<Module>>, wasm: Option<&[u8]> ) -> Result<(Vec<u8>, MetricsPacket), JobHandlingError>{
+    let instance = match module {
+        Some(m) => {create_wasm_instance(ctx.engine, None, ctx.store, Some(m))},
+        None => {create_wasm_instance(ctx.engine, wasm, ctx.store, None)}
+    }.map_err(|e| JobHandlingError::full(
+        e.to_string(), ctx.handling_started, ctx.store, ctx.fuel_init, ctx.cold_start, false
+    ))?;
+    
+    match run_wasm(instance, &mut ctx.store, &ctx.input).await {
+        Ok(result) => {
+            let packet = MetricsPacket::new(ctx.handling_started, &ctx.store, ctx.fuel_init, ctx.cold_start, true);
+            return Ok((result, packet));
         }
-    } else {
-        let result = sqlx::query("SELECT wasm FROM functions WHERE path = ?")
-            .bind(&func_name)
-            .fetch_optional(&db_pool)
-            .await;
-        match result {
-            Ok(Some(row)) => {
-                let wasm: Vec<u8> = match row.try_get("wasm") {
-                    Ok(wasm) => wasm,
-                    Err(e) => {
-                        let result = JobHandlingError::full(e.to_string(), handling_started, &store, fuel_init, true, false);
-                        return Err(result);
-                    }
-                };
-                let instance = match create_wasm_instance(&engine, &wasm, &mut store, None) {
-                    Ok(instance) => instance,
-                    Err(e) => {
-                        let result = JobHandlingError::full(e.to_string(), handling_started, &store, fuel_init, true, false);
-                        return Err(result);
-                    }
-                };
-                match run_wasm(instance, &mut store, &input).await {
-                    Ok(result) => {
-                        let packet = MetricsPacket::new(handling_started, &store, fuel_init, true, true);
-                        return Ok((result, packet));
-                    }
-                    Err(e) => {
-                        let result = JobHandlingError::full(e.to_string(), handling_started, &store, fuel_init, true, false);
-                        return Err(result);
-                    }
-                }
-            },
-            Ok(None) => {
-                let result = JobHandlingError::partial("MySql returned Ok(None)".to_string());
-                return Err(result);
-            }
-            Err(e) => {
-                let result = JobHandlingError::partial(e.to_string());
-                return Err(result)
-            }
-        };
+        Err(e) => {
+            let result = JobHandlingError::full(e.to_string(), ctx.handling_started, &ctx.store, ctx.fuel_init, ctx.cold_start, false);
+            return Err(result);
+        }
     }
 }

@@ -18,7 +18,7 @@ pub async fn start_main_loop(
     db_pool: MySqlPool,
     tl_tx: Sender<CacherTelemetry>,
     fb_tx: Sender<WorkerSignal>,
-    cache: Arc<RwLock<HashMap<String, Module>>>,
+    cache: Arc<RwLock<HashMap<String, Arc<Module>>>>,
     jobs: Arc<RwLock<Vec<JoinHandle<()>>>>,
     id: usize,
     mut rx: Receiver<Message>,

@@ -1,4 +1,5 @@
 use wasmtime::{Engine, Instance, Module, Store, Linker};
+use std::sync::Arc;
 
 use super::wasm_imports::model::{CallerTable, provide_imports};
 
@@ -44,13 +45,13 @@ pub async fn run_wasm(instance: Instance, mut store: &mut Store<CallerTable>, in
     }
 }
 
-pub fn create_wasm_instance(engine: &Engine, wasm: &[u8], mut store: &mut Store<CallerTable>, module: Option<Module>) -> anyhow::Result<Instance> {
+pub fn create_wasm_instance(engine: &Engine, wasm: Option<&[u8]>, mut store: &mut Store<CallerTable>, module: Option<Arc<Module>>) -> anyhow::Result<Instance> {
     let module = 
         if let Some(module) = module {
             module
         } else {
-            match Module::new(&engine, wasm) {
-            Ok(module) => module,
+            match Module::new(&engine, wasm.unwrap()) {
+            Ok(module) => Arc::new(module),
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to create wasm module: {}", e));
             }

@@ -12,7 +12,7 @@ use crate::workers::model::{CacherTelemetry, CacheErr};
 
 
 
-pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastSender<GCCSignal>, tl_tx: Sender<CacherTelemetry>, cache: Arc<RwLock<HashMap<String, Module>>>) ->  JoinHandle<()>{
+pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastSender<GCCSignal>, tl_tx: Sender<CacherTelemetry>, cache: Arc<RwLock<HashMap<String, Arc<Module>>>>) ->  JoinHandle<()>{
     tokio::spawn(async move {
         let mut rx = gcc_tx.subscribe();
         while let Ok(signal) = rx.recv().await {
@@ -43,7 +43,7 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                                     continue;
                                 }
                             };
-                            let _ = map.insert(func_name.clone(), module);
+                            let _ = map.insert(func_name.clone(), Arc::new(module));
                             let _ = tl_tx.send(CacherTelemetry::ModuleCached { path: path.clone()}).await;
                         },
                         Ok(None) => {
