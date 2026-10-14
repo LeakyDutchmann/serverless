@@ -15,15 +15,19 @@ pub async fn start_load_loop(
     l_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
 ) -> JoinHandle<()> {
     let handle = tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(1));
+        let mut interval = interval(Duration::from_secs(2));
         let max_workers = max_workers;
         loop {
             interval.tick().await;
-            let map = l_map.read().await;
-            let workers = map.len();
-            let mut busy_workes: Vec<(usize, usize)> = Vec::with_capacity(map.len());
+            let l_snap = {
+                let map = l_map.read().await;
+                let l_snap: Vec<(usize, WorkerLoad)> = map.iter().map(|(id, l)| (id.clone(), l.clone())).collect();
+                l_snap
+            };
+            let workers = l_snap.len();
+            let mut busy_workes: Vec<(usize, usize)> = Vec::with_capacity(workers);
             let mut future_workers = workers;
-            for (id, load) in map.iter() {
+            for (id, load) in l_snap.iter() {
                 // println!("load of {} is {}", id, load.task_count);
                 if load.task_count >= 4 {
                     busy_workes.push((*id, load.task_count));
@@ -40,8 +44,8 @@ pub async fn start_load_loop(
                 }
             }
             println!("busy workers: {}", busy_workes.len());
-            if busy_workes.len() as f64 >= map.len() as f64 * 0.75 {
-                if map.len() + 4 <= max_workers {
+            if busy_workes.len() as f64 >= workers as f64 * 0.75 {
+                if workers + 4 <= max_workers {
                     let _ = load_tx.send(SchedulerCommand::Upgrade(4)).await;
                     println!("Sent upgrade command");
                     continue; 

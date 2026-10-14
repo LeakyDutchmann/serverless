@@ -14,14 +14,13 @@ pub async fn handle_feedback(
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     signal: WorkerSignal
 )  {
-    let mut load_map = load_map.write().await;
-    let mut job_map = job_map.write().await;
     match signal {
         WorkerSignal::HeartBeat { w_id } => {
             let mut map = heartbeat_map.write().await;
             map.insert(w_id, Instant::now());
         }
         WorkerSignal::Working {w_id, j_id} => {   
+            let mut load_map = load_map.write().await;
             if let Some(load) = load_map.get_mut(&w_id) {
                 load.task_count += 1;
                 load.last_task_time = Instant::now();
@@ -31,7 +30,9 @@ pub async fn handle_feedback(
             }
         }
         WorkerSignal::Finished {w_id, j_id, result} => {
+            let mut job_map = job_map.write().await;
             if let Some(tx) = job_map.remove(&j_id) {
+                let mut load_map = load_map.write().await;
                 if let Some(load) = load_map.get_mut(&w_id) {
                     if load.task_count != 0 {
                         load.task_count -= 1;
@@ -51,7 +52,9 @@ pub async fn handle_feedback(
             }     
         }
         WorkerSignal::Failed {w_id, j_id, reason} => {
+            let mut job_map = job_map.write().await;
             if let Some(tx) = job_map.remove(&j_id) {
+                let mut load_map = load_map.write().await;
                 if let Some(load) = load_map.get_mut(&w_id) {
                     if load.task_count != 0 {
                         load.task_count -= 1;

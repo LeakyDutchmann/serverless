@@ -16,10 +16,10 @@ use wasmtime::{Engine, Module};
 
 pub type WorkerId = usize;
 
+#[derive(Clone)]
 pub struct WorkerLoad {
     pub task_count: usize,
     pub last_task_time: Instant,
-    
 }
 
 impl Default for WorkerLoad {
