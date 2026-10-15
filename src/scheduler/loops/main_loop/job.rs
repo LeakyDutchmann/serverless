@@ -23,18 +23,24 @@ pub fn handle_job(
         let id = id % workers.len();
 
         let worker = &workers[id];
+        let w_tx = worker.sender.clone();
+        drop(workers);
     
         let j_id = generate_job_id().await;
+        
+        let mut map = job_map.write().await;
+        map.insert(j_id, task.respond_to);
+        drop(map);
 
-        let result = worker.sender.send(Message::Job{path: task.path, input: task.input, j_id}).await;
+        let result = w_tx.send(Message::Job{path: task.path, input: task.input, j_id}).await;
         match result {
-            Ok(_) => {
-                let mut map = job_map.write().await;
-                map.insert(j_id, task.respond_to);
-            }
+            Ok(_) => {}
             Err(e) => {
+                let mut map = job_map.write().await;
+                let sender = map.remove(&j_id).unwrap();
+                drop(map);
                 let line = format!("Failed to send job to worker {}", e);
-                let _ = task.respond_to.send(JobResult::server_err(line));
+                let _ = sender.send(JobResult::server_err(line));
                 println!("Failed to send job to worker: {}", e)
             },
         }

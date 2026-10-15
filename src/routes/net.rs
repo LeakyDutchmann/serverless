@@ -15,7 +15,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
     let mut keep_alive;
     let break_reason;
     loop {
-        let (headers_buf, leftover, _headers_end) = match read_headers(&mut stream).await {
+            let (headers_buf, leftover, _headers_end) = match read_headers(&mut stream).await {
             Ok((headers, leftover, hn)) => (headers, leftover, hn),
             Err(e) => {
                 println!("Error reading headers: {}", e);
@@ -26,7 +26,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
         };
         
         let headers_str = String::from_utf8_lossy(&headers_buf).to_string();
-        if headers_str.contains("Connection: keep-alive") {
+        if !headers_str.contains("connection: close") && !headers_str.contains("Connection: close") {
             keep_alive = true;
         } else {
             keep_alive = false;

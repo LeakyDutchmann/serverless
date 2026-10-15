@@ -30,44 +30,63 @@ pub async fn handle_feedback(
             }
         }
         WorkerSignal::Finished {w_id, j_id, result} => {
-            let mut job_map = job_map.write().await;
-            if let Some(tx) = job_map.remove(&j_id) {
-                let mut load_map = load_map.write().await;
-                if let Some(load) = load_map.get_mut(&w_id) {
-                    if load.task_count != 0 {
-                        load.task_count -= 1;
-                        // println!("Worker {} finished task {}", w_id, j_id);
-                        tx.send(JobResult::from_ok(result));
+            let tx = {
+                let mut j_map = job_map.write().await;
+                j_map.remove(&j_id)
+            };
+            
+            if let Some(tx) = tx {
+                let tracked = {
+                    let mut load_map = load_map.write().await;
+                    if let Some(load) = load_map.get_mut(&w_id) {
+                        if load.task_count != 0 {
+                            load.task_count -= 1;
+                            true
+                        } else {
+                            false
+                        }
                     } else {
-                        tx.send(JobResult::from_ok(result));
-                        // println!("Worker {} finished untracked task", w_id);
-                    }      
-                } else {
-                    tx.send(JobResult::from_ok(result));
-                    // println!("Worker {} finished untracked task", w_id);
-                }  
-                job_map.remove(&j_id);
+                        false
+                    }
+                };
+
+                if !tracked {
+                    println!("Worker {} finished untracked task", w_id);
+                }
+                
+                tx.send(JobResult::from_ok(result));
             } else {
                 println!("Worker {} finished task that belongs to no client. Task id: {}", w_id, j_id);
             }     
         }
         WorkerSignal::Failed {w_id, j_id, reason} => {
-            let mut job_map = job_map.write().await;
-            if let Some(tx) = job_map.remove(&j_id) {
-                let mut load_map = load_map.write().await;
-                if let Some(load) = load_map.get_mut(&w_id) {
-                    if load.task_count != 0 {
-                        load.task_count -= 1;
-                        tx.send(JobResult::server_err(reason.clone()));
-                        println!("Worker {} failed task {} : Reason: {}", w_id, j_id, reason);
+            let tx = {
+                let mut j_map = job_map.write().await;
+                j_map.remove(&j_id)
+            };
+            
+            if let Some(tx) = tx {
+                let tracked = {
+                    let mut load_map = load_map.write().await;
+                    if let Some(load) = load_map.get_mut(&w_id) {
+                        if load.task_count != 0 {
+                            load.task_count -= 1;
+                            true
+                        } else {
+                            false
+                        }      
                     } else {
-                        tx.send(JobResult::server_err(reason.clone()));
-                        println!("Worker {} failed untracked task, reason: {}", w_id, reason);
-                    }      
-                } else {
-                    tx.send(JobResult::server_err(reason.clone()));
+                        false
+        
+                    }
+                };
+
+                if !tracked {
                     println!("Worker {} failed untracked task, reason: {}", w_id, reason);
                 }
+                
+                tx.send(JobResult::server_err(reason.clone()));
+                
             } else {
                 println!("Worker {} failed task that belongs to no client. Task id: {}, reason {}", w_id, j_id, reason);
             }   
