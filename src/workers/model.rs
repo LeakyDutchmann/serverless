@@ -69,7 +69,7 @@ pub struct Worker {
 
 impl Worker {
     pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>, m_tx: Sender<(String, MetricsPacket)>) -> Self {
-        let (tx, rx) = channel::<Message>(1024);
+        let (tx, rx) = channel::<Message>(4096);
         let cache: Arc<RwLock<HashMap<String, Arc<Module>>>> = Arc::new(RwLock::new(HashMap::new()));
         let jobs: Arc<RwLock<Vec<JoinHandle<()>>>> = Arc::new(RwLock::new(Vec::new()));
         let jobs_clone = Arc::clone(&jobs);

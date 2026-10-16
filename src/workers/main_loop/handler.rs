@@ -56,6 +56,7 @@ pub async fn handle_job(
             return Err(result);
         }
     };
+    
     let module = {
         let map = cache_map.read().await;
         map.get(&func_name).cloned()

@@ -10,7 +10,7 @@ use tokio::signal;
 #[tokio::main]
 async fn main() {
     let listener = TcpListener::bind("0.0.0.0:8080").await.expect("Failed to bind to port 8080");
-    let (tx, rx) = tokio::sync::mpsc::channel::<Job>(4096);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Job>(8192);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<Shutdown>(1024);
     dotenvy::dotenv().ok();
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");

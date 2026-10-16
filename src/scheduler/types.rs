@@ -67,8 +67,8 @@ pub struct ExternalChannels {
 }
 impl ExternalChannels {
     pub fn init(job_rx: Receiver<Job>, shutdown_tx: Sender<Shutdown>) -> ExternalChannels {
-        let (gcc_tx, _) = tokio::sync::broadcast::channel::<GCCSignal>(1024);
-        let (m_tx, m_rx) = tokio::sync::mpsc::channel::<(String, MetricsPacket)>(1024);
+        let (gcc_tx, _) = tokio::sync::broadcast::channel::<GCCSignal>(4096);
+        let (m_tx, m_rx) = tokio::sync::mpsc::channel::<(String, MetricsPacket)>(4096);
         ExternalChannels {
             gcc_tx: Some(gcc_tx),
             load_rx: None,
@@ -87,8 +87,8 @@ pub struct InternalChannels {
 
 impl InternalChannels {
     pub fn init() -> InternalChannels {
-        let feeedback_channel: Channel<WorkerSignal> = Channel::new(1024);
-        let telemetry_channel: Channel<CacherTelemetry> = Channel::new(1024);
+        let feeedback_channel: Channel<WorkerSignal> = Channel::new(4096);
+        let telemetry_channel: Channel<CacherTelemetry> = Channel::new(4096);
         InternalChannels {
             feedback: feeedback_channel,
             telemetry: telemetry_channel,
