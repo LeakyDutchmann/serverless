@@ -116,13 +116,13 @@ impl Scheduler {
             m_rx,
             db_pool.clone()
         );
+        //probably dev tool
         let pool_monitor = tokio::spawn(async move {
             let pool = db_pool;
-            let mut int = interval(Duration::from_secs(1));
+            let mut int = interval(Duration::from_secs(4));
             loop {
                 int.tick().await;
-                println!("Connections {}", pool.size());
-                println!("Idle: {}", pool.num_idle());
+                println!("DB Connections {}, from them idle {}", pool.size(), pool.num_idle());
             }
         });
         let tasks = RuntimeTasks {
