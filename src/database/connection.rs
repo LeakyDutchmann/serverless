@@ -4,7 +4,7 @@ use std::time::Duration;
 pub async fn connect(path: &str, max_attempts: usize) -> Option<MySqlPool> {
     for attempt in 1..=max_attempts {
         let poll = MySqlPoolOptions::new()
-            .max_connections(150)
+            .max_connections(200)
             .idle_timeout(Duration::from_secs(15))
             .connect(path)
             .await;

@@ -39,22 +39,35 @@ pub async fn start_gcc_loop
         let mut interval = interval(Duration::from_secs(10));
         let mut evict_candidates: PriorityQueue<ModuleEvictionStats, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
         loop { 
+            eprintln!("GCC: before tick");
             interval.tick().await;
+            println!("GCC loop entered");
             let instant_now = Instant::now();
             let m_counter = cache_memory_usage.load(Ordering::Relaxed);
+            println!("Getting workers");
             let w_counter = {
+                let now = Instant::now();
                 let map = workers.read().await;
+                let passed = Instant::now().duration_since(now);
+                println!("Spent time awaiting workers: {}", passed.as_millis());
                 map.len()
             };
-
+            println!("Stats");
             let (stats_snap, f_snap) = {
+                let s_n = Instant::now();
                 let map = s_map.read().await; 
-                let f_map = f_paths.read().await;
+                let s_p = Instant::now().duration_since(s_n);
                 let stats_snap: Vec<(String, ModuleStats)> = map.iter().map(|(p, s)| (p.clone(), s.clone())).collect();
+                drop(map);
+                println!("Awaited stats_map for {} ms", s_p.as_millis());
+                let f_n = Instant::now();
+                let f_map = f_paths.read().await;
                 let f_snap: HashSet<String> = f_map.iter().map(|p| p.clone()).collect();
+                drop(f_map);
+                println!("Awaited f_map for {} ms", Instant::now().duration_since(f_n).as_millis());
                 (stats_snap, f_snap)
             };
-            
+
             for (path, stats) in stats_snap.iter() {
                 if f_snap.contains(path) {
                     continue;
@@ -100,7 +113,7 @@ pub async fn start_gcc_loop
                         
                         }
                     }
-                }
+                } 
                 if instant_now.duration_since(stats.last_invocation) > Duration::from_secs(120) {
                     println!("Sending signal to evict module on path: {}", path);
                     if stats.cached_instances > 0 {

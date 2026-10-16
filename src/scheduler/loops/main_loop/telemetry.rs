@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 // I hope that cache eviction signals will do the job. Anyway, I will test all of that.
 const MAX_STATS_ENTRIES: usize = 50_000;
 
+//If you ever get to implementaton of f_paths_map, then remeber to not aquire lock for too long because it blocks your gcc loop. 
 pub async fn handle_telemetry(
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>,
@@ -23,7 +24,6 @@ pub async fn handle_telemetry(
     shutdown_tx: Sender<Shutdown>,
 )  {
     tokio::spawn(async move {
-        let _f_map = forbidden_paths.write().await;
         let instant = Instant::now();
         match tl_signal {
             CacherTelemetry::ModuleCached{path} => {

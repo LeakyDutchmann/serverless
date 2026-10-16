@@ -18,7 +18,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
             let (headers_buf, leftover, _headers_end) = match read_headers(&mut stream).await {
             Ok((headers, leftover, hn)) => (headers, leftover, hn),
             Err(e) => {
-                println!("Error reading headers: {}", e);
+                // println!("Error reading headers: {}", e);
                 let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("{}", e)), false);
                 send(&mut stream, &response).await;
                 return;

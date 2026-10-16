@@ -7,11 +7,13 @@ use super::loops::main_loop::model::start_main_loop;
 use super::loops::metrics::metrics_loop::start_metrics_loop;
 use super::types::{Job, ModuleStats, InternalChannels, ExternalChannels, RuntimeTasks, SchedulerCommand, JobResult};
 
+use tokio::time::interval;
 use tokio::{sync::mpsc::{Receiver, channel, Sender}, time::Instant};
 use sqlx::MySqlPool;
 use tokio::sync::oneshot::Sender as OneShotSender;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, atomic::{AtomicUsize}};
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 struct RuntimeState {
@@ -112,8 +114,17 @@ impl Scheduler {
         let m_rx = self.ext_channels.metrics_rx.take().unwrap();
         let metrics_loop = start_metrics_loop(
             m_rx,
-            db_pool
+            db_pool.clone()
         );
+        let pool_monitor = tokio::spawn(async move {
+            let pool = db_pool;
+            let mut int = interval(Duration::from_secs(1));
+            loop {
+                int.tick().await;
+                println!("Connections {}", pool.size());
+                println!("Idle: {}", pool.num_idle());
+            }
+        });
         let tasks = RuntimeTasks {
             scheduler_task: main_loop,
             heartbeat_task: heartbeat_loop,
