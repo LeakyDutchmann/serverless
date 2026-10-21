@@ -1,8 +1,7 @@
-use crate::http::response::{Response, StatusCode, send};
+use crate::http::response::{Response, StatusCode};
 use crate::http::utils::get_function_name;
 use super::validation::core::validate_wasm_module;
 
-use tokio::net::TcpStream;
 use sqlx::MySqlPool;
 use wasmtime::{Engine, Module};
 
@@ -15,7 +14,7 @@ pub async fn deploy(buffer: &[u8], path: &str, db_pool: &MySqlPool, engine: &Eng
     let module = match Module::new(engine, &wasm) {
         Ok(module) => {module},
         Err(e) => {
-            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}, {}", &path, e)), keep_alive);
+            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}, {}", path, e)), keep_alive);
             return response;
         }
     };
@@ -24,15 +23,15 @@ pub async fn deploy(buffer: &[u8], path: &str, db_pool: &MySqlPool, engine: &Eng
             v.len()
         }
         Err(e) => {
-            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}, {}", &path, e)), keep_alive);
+            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}, {}", path, e)), keep_alive);
             return response;
         }
     };
-    match validate_wasm_module(&engine, &module).await {
+    match validate_wasm_module(engine, &module).await {
         Ok(_) => {}
         Err(e) => {
             eprintln!("{}", e);
-            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}: {}", &path, e)), keep_alive);
+            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to deploy function at path {}: {}", path, e)), keep_alive);
             return response;
         }
     }
@@ -47,13 +46,13 @@ pub async fn deploy(buffer: &[u8], path: &str, db_pool: &MySqlPool, engine: &Eng
             let status = "function was succesfully deployed at ".to_string();
             let status = status + &path;
             let result = status.as_bytes().to_vec();
-            let response = Response::new(StatusCode::Ok, result, None, keep_alive);
-            return response;
+            
+            Response::new(StatusCode::Ok, result, None, keep_alive)
         }
         Err(e) => {
             eprintln!("Error while deploying: {}", e);
-            let response = Response::new(StatusCode::IntServerError, vec![], Some(format!("Failed to deploy function at path {}: {}",&path, e)), keep_alive);
-            return response;
+            
+            Response::new(StatusCode::IntServerError, vec![], Some(format!("Failed to deploy function at path {}: {}",path, e)), keep_alive)
         }
     }
 }

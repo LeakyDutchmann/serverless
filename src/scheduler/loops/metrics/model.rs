@@ -1,10 +1,6 @@
 use sqlx::{Row, FromRow};
 use sqlx::mysql::MySqlRow;
 use tokio::time::{Duration, Instant};
-use tokio::sync::RwLock;
-use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::mpsc::Sender;
 use wasmtime::Store;
 use crate::workers::main_loop::wasm_imports::model::CallerTable;
 
@@ -41,7 +37,7 @@ impl MetricsPacket {
             },
         };
         MetricsPacket {
-            success: success,
+            success,
             cold_start: cold,
             fuel_used_total: fuel_used,
             duration_min: duration,
@@ -128,6 +124,6 @@ impl FromRow<'_, MySqlRow> for MetricsRecord {
     }
 }
 
-pub async fn get_metrics(handling_started: Instant, store: &Store<CallerTable>, path: String, fuel_init: u64, cold: bool) {
+pub async fn get_metrics(_handling_started: Instant, _store: &Store<CallerTable>, _path: String, _fuel_init: u64, _cold: bool) {
     
 }

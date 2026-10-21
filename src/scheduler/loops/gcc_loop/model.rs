@@ -35,7 +35,8 @@ pub async fn start_gcc_loop
     cache_memory_usage: Arc<AtomicUsize>,
     cache_tx: BcastSender<GCCSignal>,
 ) -> JoinHandle<()>{
-    let handle = tokio::spawn(async move {
+    
+    tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(10));
         let mut evict_candidates: PriorityQueue<ModuleEvictionStats, Reverse<OrderedFloat<f64>>> = PriorityQueue::new();
         loop { 
@@ -52,7 +53,7 @@ pub async fn start_gcc_loop
                 let stats_snap: Vec<(String, ModuleStats)> = map.iter().map(|(p, s)| (p.clone(), s.clone())).collect();
                 drop(map);
                 let f_map = f_paths.read().await;
-                let f_snap: HashSet<String> = f_map.iter().map(|p| p.clone()).collect();
+                let f_snap: HashSet<String> = f_map.iter().cloned().collect();
                 drop(f_map);
                 (stats_snap, f_snap)
             };
@@ -62,10 +63,10 @@ pub async fn start_gcc_loop
                     continue;
                 }
                 let path_clone = path.clone();
-                if let Some(pre_last) = stats.pre_last_invocation {
-                    if stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60) {
-                        if instant_now.duration_since(stats.last_invocation) < Duration::from_secs(60) {
-                            if stats.cached_instances < w_counter as u64 {
+                if let Some(pre_last) = stats.pre_last_invocation
+                    && stats.last_invocation.duration_since(pre_last) < Duration::from_secs(60)
+                        && instant_now.duration_since(stats.last_invocation) < Duration::from_secs(60)
+                            && stats.cached_instances < w_counter as u64 {
                                 let memory_needed = stats.memory_usage * w_counter + m_counter;
                                 if memory_needed < MAX_MEMORY_USAGE {
                                     println!("Sending signal to cache module on path: {}", path);
@@ -84,25 +85,19 @@ pub async fn start_gcc_loop
                                             break;
                                         }
                                         if let Some((e_stats, Reverse(OrderedFloat(e_use_dynamic)))) = evict_candidates.peek() {
-                                            if memory_needed <= e_stats.total_memory_usage {
-                                                if e_use_dynamic < &use_dynamic {
+                                            if memory_needed <= e_stats.total_memory_usage
+                                                && e_use_dynamic < &use_dynamic {
                                                     let _ = cache_tx.send(GCCSignal::EvictModule{path: e_stats.path.clone()});
                                                     memory_freed += e_stats.total_memory_usage;
                                                     let _ = evict_candidates.pop();
                                                 }
-                                            }
                                         } else {
                                             break;
                                         }
                                     }
                                     
                                 }
-                            }
-                            
-                        
-                        }
-                    }
-                } 
+                            } 
                 if instant_now.duration_since(stats.last_invocation) > Duration::from_secs(120) {
                     println!("Sending signal to evict module on path: {}", path);
                     if stats.cached_instances > 0 {
@@ -126,6 +121,5 @@ pub async fn start_gcc_loop
             println!("workers: {}", w_counter);
             evict_candidates.clear();
         }
-    });
-    handle
+    })
 }

@@ -81,6 +81,12 @@ pub struct CallerTable {
     pub future_trailers: HashMap<u32, FutureTrailers>,
 }
 
+impl Default for CallerTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CallerTable {
     pub fn new() -> Self {
         Self {
@@ -101,20 +107,20 @@ impl CallerTable {
 }
 
 
-pub fn provide_imports(mut linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
-    match provide_logging(&mut linker) {
+pub fn provide_imports(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
+    match provide_logging(linker) {
         Ok(_) => {},
         Err(e) => {
             return Err(anyhow::anyhow!("Failed to provide logging: {}", e));
         }
     }
-    match provide_random(&mut linker) {
+    match provide_random(linker) {
         Ok(_) => {},
         Err(e) => {
             return Err(anyhow::anyhow!("Failed to provide random: {}", e));
         }
     }
-    match provide_http(&mut linker) {
+    match provide_http(linker) {
         Ok(_) => {},
         Err(e) => {
             return Err(anyhow::anyhow!("Failed to provide http: {}", e));

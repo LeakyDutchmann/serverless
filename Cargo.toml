@@ -5,8 +5,10 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+dhat = "0.3.3"
 dotenvy = "0.15.7"
 futures = "0.3.33"
+mimalloc = "0.1.52"
 ordered-float = "5.5.0"
 priority-queue = "2.7.0"
 rand = "0.10.3"
@@ -22,3 +24,6 @@ tokio-tungstenite = "0.30.0"
 wasi = "0.14.7"
 wasmparser = "0.256.0"
 wasmtime = { version = "47.0.3", features = ["cranelift"] }
+
+[profile.release]
+debug = true

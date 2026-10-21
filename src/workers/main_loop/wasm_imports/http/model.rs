@@ -5,10 +5,10 @@ use super::super::model::CallerTable;
 
 use wasmtime::Linker;
 
-pub fn provide_http(mut linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
-    outgoing::register(&mut linker)?;
-    incoming::register(&mut linker)?;
-    io::register(&mut linker)?;
+pub fn provide_http(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
+    outgoing::register(linker)?;
+    incoming::register(linker)?;
+    io::register(linker)?;
     
     Ok(())
 }

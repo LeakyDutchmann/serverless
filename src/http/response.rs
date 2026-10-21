@@ -47,10 +47,10 @@ impl Response {
             headers.push(("Content-Length".to_string(), format!("{}", len)));
             headers.push(("Content-Type".to_string(), "application/json".to_string()));
             if keep_alive {
-                headers.push((format!("Connection"), format!("keep-alive")));
-                headers.push((format!("Keep-Alive"), format!("timeout=5, max=100")));
+                headers.push(("Connection".to_string(), "keep-alive".to_string()));
+                headers.push(("Keep-Alive".to_string(), "timeout=5, max=100".to_string()));
             } else {
-                headers.push((format!("Connection"), format!("close")));
+                headers.push(("Connection".to_string(), "close".to_string()));
             }
             Response {
                 status,
@@ -67,9 +67,9 @@ impl Response {
             headers.push(("Content-Length".to_string(), format!("{}", len)));
             headers.push(("Content-Type".to_string(), "application/json".to_string()));
             if keep_alive {
-                headers.push((format!("Connection"), format!("keep-alive")))
+                headers.push(("Connection".to_string(), "keep-alive".to_string()))
             } else {
-                headers.push((format!("Connection"), format!("close")))
+                headers.push(("Connection".to_string(), "close".to_string()))
             }
             Response {
                 status,
@@ -88,7 +88,7 @@ impl Response {
         line += "\r\n";
         
         let mut headers = line.as_bytes().to_vec();
-        headers.extend_from_slice(&self.body.as_slice());
+        headers.extend_from_slice(self.body.as_slice());
         headers
     }
 }

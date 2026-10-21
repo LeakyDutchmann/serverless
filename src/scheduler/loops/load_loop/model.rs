@@ -14,14 +14,15 @@ pub async fn start_load_loop(
     load_tx: Sender<SchedulerCommand>,
     l_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
 ) -> JoinHandle<()> {
-    let handle = tokio::spawn(async move {
+    
+    tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(2));
         let max_workers = max_workers;
         loop {
             interval.tick().await;
             let l_snap = {
                 let map = l_map.read().await;
-                let l_snap: Vec<(usize, WorkerLoad)> = map.iter().map(|(id, l)| (id.clone(), l.clone())).collect();
+                let l_snap: Vec<(usize, WorkerLoad)> = map.iter().map(|(id, l)| (*id, l.clone())).collect();
                 l_snap
             };
             let workers = l_snap.len();
@@ -33,26 +34,22 @@ pub async fn start_load_loop(
                     busy_workes.push((*id, load.task_count));
                 }
                 
-                if future_workers > 4 {
-                    if load.task_count == 0 {
-                        if Instant::now().duration_since(load.last_task_time) > Duration::from_secs(30) {
+                if future_workers > 4
+                    && load.task_count == 0
+                        && Instant::now().duration_since(load.last_task_time) > Duration::from_secs(30) {
                             let _ = load_tx.send(SchedulerCommand::Downgrade(*id)).await;
                             future_workers -= 1;
                             println!("Sent downgrade command");  
-                        }    
-                    }
-                }
+                        }
             }
             println!("busy workers: {}", busy_workes.len());
-            if busy_workes.len() as f64 >= workers as f64 * 0.75 {
-                if workers + 4 <= max_workers {
+            if busy_workes.len() as f64 >= workers as f64 * 0.75
+                && workers + 4 <= max_workers {
                     let _ = load_tx.send(SchedulerCommand::Upgrade(4)).await;
                     println!("Sent upgrade command");
                     continue; 
                 }
-            }
             
         }
-    });
-    handle
+    })
 }

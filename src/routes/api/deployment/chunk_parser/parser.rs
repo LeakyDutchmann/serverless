@@ -6,7 +6,7 @@ use tokio::io::AsyncReadExt;
 
 pub async fn get_wasm_chunked<'a>(buffer: &'a [u8], string_buffer: &'a String, stream: &mut TcpStream) -> Result<Vec<u8>, ChunkReadingError> {
     let mut wasm_vec: Vec<u8> = Vec::new();
-    let body_idx = match get_body_idx(&string_buffer) {
+    let body_idx = match get_body_idx(string_buffer) {
         Some(idx) => idx,
         None => {
             eprintln!("failed to find body index");
@@ -54,7 +54,7 @@ pub async fn read_chunks_from_buffer(buffer: &mut Vec<u8>, wasm_vec: &mut Vec<u8
                 Err(_) => return ChunkParserResult::Error(ChunkParserError::InvalidUtf8 { line }),
             };
             let hex = size_str.split(';').next().unwrap();
-            if let Ok(chunk_size) = usize::from_str_radix(&hex, 16) {
+            if let Ok(chunk_size) = usize::from_str_radix(hex, 16) {
                 if chunk_size == 0 {
                     loop {
                         if let Some(pos) = buffer.windows(2).position(|w| w == b"\r\n") {

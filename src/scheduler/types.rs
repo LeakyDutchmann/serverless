@@ -6,7 +6,6 @@ use super::shutdown::Shutdown;
 
 use tokio::{sync::mpsc::{Receiver, Sender}, time::Instant};
 use tokio::task::JoinHandle;
-use tokio::net::TcpStream;
 use tokio::sync::oneshot::Sender as OneShotSender;
 
 pub enum JobResult {

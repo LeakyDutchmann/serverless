@@ -6,18 +6,18 @@ use wasmtime::Caller;
 use wasmtime::Linker;
 use wasi::http::types::IncomingBody;
 
-pub fn register(mut linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
-    register_status(&mut linker)?;
-    register_body(&mut linker)?;
-    register_headers(&mut linker)?;
-    register_stream(&mut linker)?;
-    register_drop_response(&mut linker)?;
-    register_drop_body(&mut linker)?;
-    register_finish_body(&mut linker)?;
-    register_future_response_poll(&mut linker)?;
-    register_trailers(&mut linker)?;
-    register_future_trailers(&mut linker)?;
-    register_drop_trailers(&mut linker)?;
+pub fn register(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
+    register_status(linker)?;
+    register_body(linker)?;
+    register_headers(linker)?;
+    register_stream(linker)?;
+    register_drop_response(linker)?;
+    register_drop_body(linker)?;
+    register_finish_body(linker)?;
+    register_future_response_poll(linker)?;
+    register_trailers(linker)?;
+    register_future_trailers(linker)?;
+    register_drop_trailers(linker)?;
     Ok(())
 }
 
@@ -80,10 +80,10 @@ fn register_finish_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
             let trailers =  IncomingBody::finish(body); 
             let new_handle = data.next_handle;
             data.next_handle += 1;
-            data.future_trailers.insert(new_handle as u32, trailers);
+            data.future_trailers.insert(new_handle, trailers);
             new_handle as i32
         } else {
-            return 0
+            0
         }
     })?;
     Ok(())
@@ -116,7 +116,7 @@ fn register_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Err
             Ok(_) => {
                 if len != 0 { len as i32 } else { 0 }
             }
-            Err(_) => return 0,
+            Err(_) => 0,
         }
         
     })?;
@@ -184,21 +184,21 @@ fn register_future_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyh
                         data.next_handle += 1;
                         if let Some(trailers) = trailers {
                             data.incoming_trailers.insert(new_handle, trailers);
-                            return new_handle as i32
+                            new_handle as i32
                         } else {
-                            return 0
+                            0
                         }
                     }
                     Err(e) => {
                         println!("failed to get trailers: {:?}", e);
-                        return 0
+                        0
                     }
                 }
             } else {
-                return 0
+                0
             }
         } else {
-            return 0
+            0
         }
     })?;
     Ok(())
@@ -253,9 +253,9 @@ fn register_status(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error
         data.memory_usage.update(m_usage);
         
         if let Some(response) = data.incoming_responses.get(&handle) {
-            return response.status() as i32
+            response.status() as i32
         } else {
-            return 0
+            0
         }
     })?;
     Ok(())

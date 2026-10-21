@@ -47,8 +47,8 @@ pub async fn drop_dead_worker(workers: Arc<RwLock<Vec<Worker>>>, to_remove: usiz
 }
 
 pub async fn generate_job_id() -> usize {
-    let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-    id
+    
+    NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 

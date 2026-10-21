@@ -14,7 +14,7 @@ pub fn start_metrics_loop(
     mut rx: Receiver<(String, MetricsPacket)>,
     db: MySqlPool,
 ) -> JoinHandle<()> {
-    let task = tokio::spawn(async move {
+    tokio::spawn(async move {
         let db_pool = db.clone();
         let mut flush_timeout = interval(Duration::from_secs(15));
         let queue: Arc<RwLock<HashMap<String, MetricsRecord>>> = Arc::new(RwLock::new(HashMap::new()));
@@ -41,8 +41,7 @@ pub fn start_metrics_loop(
                 } 
             }
         }
-    });
-    task
+    })
 }
 
 async fn handle_queue_flush(db_pool: MySqlPool, arc_map: Arc<RwLock<HashMap<String, MetricsRecord>>>) {
@@ -137,14 +136,14 @@ fn merge_records(mut r_1: MetricsRecord, r_2: MetricsRecord) -> MetricsRecord {
     r_1.memory_min = r_1.memory_min.min(r_2.memory_min);
     r_1.duration_max = r_1.duration_max.max(r_2.duration_max);
     r_1.duration_min = r_1.duration_min.min(r_2.duration_min);
-    return r_1;
+    r_1
 }
 
 fn update_record(record: &mut MetricsRecord, packet: MetricsPacket)  {
     let r = record;
     let p = packet;
     
-    r.memory_mean = (r.invocations as f64 * r.memory_mean + 1 as f64 * p.memory_mean) / (r.invocations + 1) as f64;
+    r.memory_mean = (r.invocations as f64 * r.memory_mean + 1_f64 * p.memory_mean) / (r.invocations + 1) as f64;
     r.duration_mean = merge_duration(r.duration_mean, r.invocations, p.duration_mean, 1);
 
     if p.success {

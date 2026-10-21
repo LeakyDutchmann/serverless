@@ -17,7 +17,7 @@ const MAX_STATS_ENTRIES: usize = 50_000;
 //If you ever get to implementaton of f_paths_map, then remeber to not aquire lock for too long because it blocks your gcc loop. 
 pub async fn handle_telemetry(
     stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
-    forbidden_paths: Arc<RwLock<HashSet<String>>>,
+    _forbidden_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
     db_pool: MySqlPool,
     tl_signal: CacherTelemetry,
@@ -32,7 +32,7 @@ pub async fn handle_telemetry(
                 
                 if let Some(stats) = map.get_mut(&path) {
                     stats.cached_instances += 1;
-                    cache_memory_usage.fetch_add(stats.memory_usage as usize, std::sync::atomic::Ordering::Relaxed);
+                    cache_memory_usage.fetch_add(stats.memory_usage, std::sync::atomic::Ordering::Relaxed);
                     println!("Module cached: {}, memory_usage: {}", path, stats.memory_usage);
                     return;
                 }  

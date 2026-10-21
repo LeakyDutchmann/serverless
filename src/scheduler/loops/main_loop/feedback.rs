@@ -1,5 +1,4 @@
 use crate::workers::model::{{WorkerSignal, WorkerId, WorkerLoad}};
-use crate::http::response::{Response, StatusCode, send};
 use crate::scheduler::types::JobResult;
 
 use tokio::time::Instant;
@@ -19,7 +18,7 @@ pub async fn handle_feedback(
             let mut map = heartbeat_map.write().await;
             map.insert(w_id, Instant::now());
         }
-        WorkerSignal::Working {w_id, j_id} => {   
+        WorkerSignal::Working {w_id, j_id: _} => {   
             let mut load_map = load_map.write().await;
             if let Some(load) = load_map.get_mut(&w_id) {
                 load.task_count += 1;

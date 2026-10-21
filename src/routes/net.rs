@@ -26,11 +26,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
         };
         
         let headers_str = String::from_utf8_lossy(&headers_buf).to_string();
-        if !headers_str.contains("connection: close") && !headers_str.contains("Connection: close") {
-            keep_alive = true;
-        } else {
-            keep_alive = false;
-        }
+        keep_alive = !headers_str.contains("connection: close") && !headers_str.contains("Connection: close");
         let body = if headers_str.contains("Transfer-Encoding: chunked") {
             let result = read_body_chunked(&mut stream, &leftover).await;
             match result {
@@ -46,7 +42,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
             let len = get_body_len(&headers_str);
             if len.is_none() {
                 println!("No body len provided");
-                let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Mailformed request: no body length defined")), keep_alive);
+                let response = Response::new(StatusCode::BadRequest, vec![], Some("Mailformed request: no body length defined".to_string()), keep_alive);
                 send(&mut stream, &response).await;
                 return;
             }
@@ -107,7 +103,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
                         return;
                     }
                 }, 
-                Err(e) => {
+                Err(_e) => {
                     return;
                     //something went wrong with stream, no keep alive possible.
                 }

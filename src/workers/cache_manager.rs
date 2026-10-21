@@ -57,7 +57,7 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                 GCCSignal::EvictModule { path } => {
                     let func_name = get_function_name(&path);
                     if let Some(_) = cache.write().await.remove(&func_name) {
-                        let _ = tl_tx.send(CacherTelemetry::ModuleEvicted { path: path }).await;
+                        let _ = tl_tx.send(CacherTelemetry::ModuleEvicted { path }).await;
                     }
                 }
             }

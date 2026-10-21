@@ -52,7 +52,7 @@ pub const ALLOWED: &[&str] = &[
 ];
 
 pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::Result<()>{
-    match validate_wasm_exports(&module) {
+    match validate_wasm_exports(module) {
         Ok(_) => {
             
         }
@@ -61,7 +61,7 @@ pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::R
             return Err(anyhow::anyhow!("{}", e));
         }
     }
-    match validate_wasm_imports(&module) {
+    match validate_wasm_imports(module) {
         Ok(_) => {
             
         }
@@ -70,8 +70,8 @@ pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::R
             return Err(anyhow::anyhow!("{}", e));
         }
     }
-    let mut store = Store::new(&engine, CallerTable::new());
-    let mut linker = Linker::new(&engine);
+    let mut store = Store::new(engine, CallerTable::new());
+    let mut linker = Linker::new(engine);
     match provide_imports(&mut linker) {
         Ok(_) => {}
         Err(e) => {
@@ -79,7 +79,7 @@ pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::R
             return Err(anyhow::anyhow!("failed to provide imports to module: {}", e));
         }
     }
-    let instance = match linker.instantiate(&mut store, &module) {
+    let instance = match linker.instantiate(&mut store, module) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("failed to instantiate module: {}", e);
@@ -103,7 +103,7 @@ pub async fn validate_wasm_module(engine: &Engine, module: &Module) -> anyhow::R
     match validate_alloc_pointer(ptr, &instance, &mut store) {
         Ok(_) => {Ok(())}
         Err(e) => {
-            return Err(anyhow::anyhow!("{}", e));
+            Err(anyhow::anyhow!("{}", e))
         }
     }
 }

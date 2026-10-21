@@ -11,7 +11,7 @@ pub fn provide_logging(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::E
         let m_usage = memory.data_size(&caller) as u64;
         let metrics = caller.data_mut();
         metrics.memory_usage.update(m_usage);
-        let _ = memory.read(&mut caller, ptr as usize, &mut buffer).unwrap();
+        memory.read(&mut caller, ptr as usize, &mut buffer).unwrap();
         // println!("WASMLOG: {}", String::from_utf8_lossy(&buffer[..len as usize]));
     }) {
         Ok(_) => Ok(()),

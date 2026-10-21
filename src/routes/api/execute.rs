@@ -1,12 +1,11 @@
 use crate::scheduler::types::{Job, JobResult};
-use crate::http::response::{Response, StatusCode, send};
+use crate::http::response::{Response, StatusCode};
 use crate::http::utils::get_input;
 
-use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
 
 pub async fn execute(buffer: &[u8], path: &str, j_tx: Sender<Job>, keep_alive: bool) -> Response {
-    let input: Vec<u8> =  match get_input(&buffer) {
+    let input: Vec<u8> =  match get_input(buffer) {
         Ok(input) => input,
         Err(e) => {
             println!("Failed to get input: {:?}", e);
@@ -36,7 +35,8 @@ pub async fn execute(buffer: &[u8], path: &str, j_tx: Sender<Job>, keep_alive: b
                     return response;
                 }
             }
-            let response = match rx.await {
+            
+            match rx.await {
                 Ok(result) => {
                     match result {
                         JobResult::Ok{result} => {
@@ -53,13 +53,12 @@ pub async fn execute(buffer: &[u8], path: &str, j_tx: Sender<Job>, keep_alive: b
                 Err(e) => {
                     Response::new(StatusCode::IntServerError, vec![], Some(e.to_string()), keep_alive)
                 }
-            };
-            return response;
+            }
         }
         Err(e) => {
             println!("Failed to wrap input value {:?}", e);
-            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to wrap input value as a json {}", e)), keep_alive);
-            return response;
+            
+            Response::new(StatusCode::BadRequest, vec![], Some(format!("Failed to wrap input value as a json {}", e)), keep_alive)
         }
     }
 }

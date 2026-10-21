@@ -28,8 +28,8 @@ pub fn get_body_len(string_buffer: &str) -> Option<usize> {
 }
 
 pub fn get_function_name(path: &str) -> String {
-    let new = path.split('/').last().unwrap_or("").to_string();
-    new
+    
+    path.split('/').next_back().unwrap_or("").to_string()
 }
 
 pub fn parse_request_line(request: &str) -> Option<(String, String)> {

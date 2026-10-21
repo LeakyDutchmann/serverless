@@ -30,8 +30,8 @@ fn register_handle(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error
         data.memory_usage.update(m_usage);
         
         if let Some((request, body_handle)) = data.outgoing_requests.remove(&handle) {
-            if body_handle.handle.is_some() {
-                if let Some((body, stream_handle, trailers_handle)) = data.outgoing_body.remove(&body_handle.handle.unwrap()) {
+            if body_handle.handle.is_some()
+                && let Some((body, stream_handle, trailers_handle)) = data.outgoing_body.remove(&body_handle.handle.unwrap()) {
                     if !stream_handle.released {
                         if stream_handle.handle.is_some() {
                             data.output_streams.remove(&stream_handle.handle.unwrap());
@@ -42,11 +42,7 @@ fn register_handle(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error
                     }
                     
                     let trailers = if trailers_handle.handle.is_some() {
-                        if let Some(trailers) = data.outgoing_trailers.remove(&trailers_handle.handle.unwrap()) {
-                            Some(trailers)
-                        } else {
-                            None
-                        }
+                        data.outgoing_trailers.remove(&trailers_handle.handle.unwrap())
                     } else {
                         None
                     };
@@ -59,7 +55,6 @@ fn register_handle(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error
                         }
                     }
                 }
-            }
             let future = outgoing_handler::handle(request, None);
             match future {
                 Ok(f) => {
@@ -173,7 +168,7 @@ fn register_append_header(linker: &mut Linker<CallerTable>) -> Result<(), anyhow
                 },
             }
         } else {
-            return (1, 0)
+            (1, 0)
         }
     })?;
     Ok(())
@@ -200,7 +195,7 @@ fn register_set_authority(linker: &mut Linker<CallerTable>) -> Result<(), anyhow
                 }
             }
         } else {
-            return (1, 0)
+            (1, 0)
         }
     })?;
     Ok(())
@@ -219,17 +214,17 @@ fn register_body(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
             let new_handle = data.next_handle;
             data.next_handle += 1;
             if let Ok(outgoing_body) = req.body() {
-                body_handle.handle = Some(new_handle as u32);
+                body_handle.handle = Some(new_handle);
                 let t_handle = data.next_handle;
                 data.next_handle += 1;
                 data.outgoing_body.insert(new_handle, (outgoing_body, StreamHandle::empty(), TrailersHandle::from(t_handle)));
                 data.outgoing_trailers.insert(t_handle, Fields::new());
-                return new_handle as i32
+                new_handle as i32
             } else {
-                return 0
+                0
             }
         } else {
-            return 0
+            0
         }
     })?;
     Ok(())
@@ -253,12 +248,12 @@ fn register_body_stream(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
                 stream_handle.handle.replace(new_handle);
                 data.next_handle += 1;
                 data.output_streams.insert(new_handle, (stream, ParentHandle { handle }));
-                return new_handle as i32
+                new_handle as i32
             } else {
-                return 0
+                0
             }
         } else {
-            return 0
+            0
         }
     })?;
     Ok(())
@@ -289,17 +284,17 @@ fn register_append_trailers(linker: &mut Linker<CallerTable>) -> Result<(), anyh
             if let Some(handle) = trailers_handle.handle {
                 if let Some(trailers) = data.outgoing_trailers.get_mut(&handle) {
                     match trailers.append(&name, val) {
-                        Ok(_) => return (0, 0),
-                        Err(_) => return (1, 0),
+                        Ok(_) => (0, 0),
+                        Err(_) => (1, 0),
                     }
                 } else {
-                    return (1, 0);
+                    (1, 0)
                 }
             } else {
-                return (1, 0);
+                (1, 0)
             }
         } else {
-            return (1, 0);
+            (1, 0)
         }
         
     })?;
@@ -324,11 +319,10 @@ fn register_body_finish(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
                 }
             }
             let mut trailers = None;
-            if trailers_handle.handle.is_some() {
-                if let Some(fields) = data.outgoing_trailers.remove(&trailers_handle.handle.unwrap()) {
+            if trailers_handle.handle.is_some()
+                && let Some(fields) = data.outgoing_trailers.remove(&trailers_handle.handle.unwrap()) {
                     trailers = Some(fields)
                 }
-            }
             match OutgoingBody::finish(body, trailers) {
                 Ok(_) =>  {
                     
@@ -340,7 +334,7 @@ fn register_body_finish(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::
             };
             (0, 0)
         } else {
-            return (1, 0)
+            (1, 0)
         }
     })?;
     Ok(())

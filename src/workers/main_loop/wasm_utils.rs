@@ -10,13 +10,13 @@ pub async fn run_wasm(instance: Instance, mut store: &mut Store<CallerTable>, in
             return Err("No memory found in wasm module".to_string());
         }
     };
-    let ptr = match get_alloc_ptr(instance, &mut store, &input) {
+    let ptr = match get_alloc_ptr(instance, store, input) {
         Ok(ptr) => ptr,
         Err(e) => {
             return Err(e.to_string());
         }
     };
-    match memory.write(&mut store, ptr as usize, &input) {
+    match memory.write(&mut store, ptr as usize, input) {
         Ok(_) => {}
         Err(e) => {
             return Err(e.to_string());
@@ -37,10 +37,10 @@ pub async fn run_wasm(instance: Instance, mut store: &mut Store<CallerTable>, in
     let func_result = memory.read(&mut store, new_ptr as usize, &mut buffer);
     match func_result {
         Ok(_) => {
-            return Ok(buffer);
+            Ok(buffer)
         }
         Err(e) => {
-            return Err(e.to_string())
+            Err(e.to_string())
         }
     }
 }
@@ -50,14 +50,14 @@ pub fn create_wasm_instance(engine: &Engine, wasm: Option<&[u8]>, mut store: &mu
         if let Some(module) = module {
             module
         } else {
-            match Module::new(&engine, wasm.unwrap()) {
+            match Module::new(engine, wasm.unwrap()) {
             Ok(module) => Arc::new(module),
             Err(e) => {
                 return Err(anyhow::anyhow!("Failed to create wasm module: {}", e));
             }
         }
     };
-    let mut linker = Linker::new(&engine);
+    let mut linker = Linker::new(engine);
     match provide_imports(&mut linker) {
         Ok(_) => {},
         Err(e) => {

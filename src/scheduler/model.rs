@@ -60,16 +60,16 @@ impl Scheduler {
             workers.push(worker);
         }
         
-        let scheduler = Scheduler {
-            max_workers: max_workers,
+         
+        Scheduler {
+            max_workers,
             workers: Arc::new(RwLock::new(workers)),
             int_channels: Some(int_channels),
-            ext_channels: ext_channels,
+            ext_channels,
             tasks: None,
             db_pool,
             load_map: Arc::new(RwLock::new(load_map)),
-        }; 
-        scheduler
+        }
     }
     pub async fn run(&mut self) {
         if self.int_channels.is_none() {
@@ -117,7 +117,7 @@ impl Scheduler {
             db_pool.clone()
         );
         //probably dev tool
-        let pool_monitor = tokio::spawn(async move {
+        let _pool_monitor = tokio::spawn(async move {
             let pool = db_pool;
             let mut int = interval(Duration::from_secs(4));
             loop {

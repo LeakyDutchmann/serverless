@@ -40,7 +40,8 @@ pub async fn start_main_loop(
     shutdown_tx: Sender<Shutdown>,
     m_tx: Sender<(String, MetricsPacket)>,
 ) -> JoinHandle<()> {
-    let handle = tokio::spawn(async move {
+    
+    tokio::spawn(async move {
         loop {
             select! {
                 Some(worker_signal) = internal_channels.feedback.rx.recv() => {
@@ -58,6 +59,5 @@ pub async fn start_main_loop(
                 }
             }
         }
-    });
-    handle
+    })
 }

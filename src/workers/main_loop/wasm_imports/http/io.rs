@@ -1,10 +1,10 @@
 use super::super::model::CallerTable;
 use wasmtime::{Linker, Caller};
 
-pub fn register(mut linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
-    register_read(&mut linker)?;
-    register_write(&mut linker)?;
-    register_drop(&mut linker)?;
+pub fn register(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> {
+    register_read(linker)?;
+    register_write(linker)?;
+    register_drop(linker)?;
     Ok(())
 }
 
@@ -28,7 +28,7 @@ fn register_read(linker: &mut Linker<CallerTable>) -> Result<(), anyhow::Error> 
                 }
             }
         }
-        if buffer.len() > 0 { 
+        if !buffer.is_empty() { 
             data.memory_usage.update(m_usage + buffer.len() as u64);
             memory.write(caller, offset, &buffer).unwrap();
         }

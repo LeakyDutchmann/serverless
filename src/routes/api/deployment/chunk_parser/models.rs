@@ -67,13 +67,13 @@ impl Display for ChunkParserError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ChunkParserError::InvalidUtf8 { line } => {
-                write!(f, "Invalid Utf8 characters: {}", String::from_utf8_lossy(&line))
+                write!(f, "Invalid Utf8 characters: {}", String::from_utf8_lossy(line))
             }
             ChunkParserError::InvalidChunkSize{line} => {
                 write!(f, "Size: {}", line)
             }
             ChunkParserError::MissingCRLF{after_chunk} => {
-                write!(f, "The line: {} is placed instead of proper CRLF", String::from_utf8_lossy(&after_chunk))
+                write!(f, "The line: {} is placed instead of proper CRLF", String::from_utf8_lossy(after_chunk))
             }
             ChunkParserError::TrailingGarbage { bytes } => {
                 write!(f, "Trailing garbage: {:?}", bytes)

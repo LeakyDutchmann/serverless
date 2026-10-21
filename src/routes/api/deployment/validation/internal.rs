@@ -55,39 +55,36 @@ pub fn check_internal_exports(bytes: &[u8]) -> anyhow::Result<()> {
                 }
                 for d in data {
                     let d = d?;
-                    match d.kind {
-                        DataKind::Active{memory_index, offset_expr} => {
-                            if memory_index != 0 {
-                                return Err(anyhow::anyhow!("Module contains active data with non-zero memory index: {}", memory_index));
-                            }
-                            let mut offset: Option<u32> = None;
-                            let operators = offset_expr.get_operators_reader(); 
-                            for operator in operators {
-                                let operator = operator?;
-                                match operator {
-                                    Operator::I32Const{value} => {
-                                        if value < 0 {
-                                            return Err(anyhow::anyhow!("Negative offset: {}", value));
-                                        }
-                                        offset = Some(value as u32);
+                    if let DataKind::Active{memory_index, offset_expr} = d.kind {
+                        if memory_index != 0 {
+                            return Err(anyhow::anyhow!("Module contains active data with non-zero memory index: {}", memory_index));
+                        }
+                        let mut offset: Option<u32> = None;
+                        let operators = offset_expr.get_operators_reader(); 
+                        for operator in operators {
+                            let operator = operator?;
+                            match operator {
+                                Operator::I32Const{value} => {
+                                    if value < 0 {
+                                        return Err(anyhow::anyhow!("Negative offset: {}", value));
                                     }
-                                    Operator::End => {
-                                        break;
-                                    }
-                                    _ => {
-                                        return Err(anyhow::anyhow!("Unsupported operator: {:?}", operator));
-                                    }
+                                    offset = Some(value as u32);
+                                }
+                                Operator::End => {
+                                    break;
+                                }
+                                _ => {
+                                    return Err(anyhow::anyhow!("Unsupported operator: {:?}", operator));
                                 }
                             }
-                            let data_len = d.data.len() as u32;
-                            if offset.is_none() {
-                                return Err(anyhow::anyhow!("No offset found"));
-                            }
-                            if offset.unwrap() as u64 + data_len as u64 > max_memory_size.unwrap() {
-                                return Err(anyhow::anyhow!("Offset + data length exceeds max memory size"));
-                            }
                         }
-                        _ => {}
+                        let data_len = d.data.len() as u32;
+                        if offset.is_none() {
+                            return Err(anyhow::anyhow!("No offset found"));
+                        }
+                        if offset.unwrap() as u64 + data_len as u64 > max_memory_size.unwrap() {
+                            return Err(anyhow::anyhow!("Offset + data length exceeds max memory size"));
+                        }
                     }
                 }
             }

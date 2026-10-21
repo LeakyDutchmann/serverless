@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 
 pub async fn start_hb_loop(hb_tx: Sender<SchedulerCommand>, h_map: Arc<RwLock<HashMap<usize, Instant>>>,) -> JoinHandle<()> {
-    let handle = tokio::spawn(async move {
+    
+    tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(3));
         let sender = hb_tx.clone();
         loop {
@@ -19,6 +20,5 @@ pub async fn start_hb_loop(hb_tx: Sender<SchedulerCommand>, h_map: Arc<RwLock<Ha
                 }
             }
         }
-    });
-    handle
+    })
 }

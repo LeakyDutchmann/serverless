@@ -1,12 +1,10 @@
 use crate::workers::model::{Worker, Message};
-use crate::http::response::{Response, StatusCode, send};
 use crate::scheduler::types::{Job, JobResult};
 
 use crate::scheduler::utils::generate_job_id;
 
 use tokio::sync::oneshot::Sender as OneShotSender;
 use std::collections::HashMap;
-use tokio::sync::mpsc::Sender;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};

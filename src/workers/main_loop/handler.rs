@@ -1,10 +1,9 @@
 use sqlx::{MySqlPool, Row};
-use wasmtime::{Engine, Instance, Module, Store};
+use wasmtime::{Engine, Module, Store};
 use tokio::sync::RwLock;
 use tokio::time::Instant;
 use std::sync::Arc;
 use std::collections::HashMap;
-use tokio::sync::mpsc::Sender;
 
 use crate::http::utils::get_function_name;
 use super::wasm_utils::run_wasm;
@@ -28,7 +27,7 @@ struct JobContext<'a> {
 
 impl JobHandlingError {
     pub fn full(message: String, handling_started: Instant, store: &Store<CallerTable>, fuel_init: u64, cold: bool, success: bool) -> Self {
-        let m = MetricsPacket::new(handling_started, &store, fuel_init, cold, success);
+        let m = MetricsPacket::new(handling_started, store, fuel_init, cold, success);
         Self { message, metrics: Some(m) }
     }
     pub fn partial(message: String) -> Self {
@@ -84,7 +83,7 @@ pub async fn handle_job(
     let Some(row) = row else { return Err(JobHandlingError::partial("Not found in database".to_string()))};
     let wasm: Vec<u8> = row.try_get("wasm")
         .map_err(|e| JobHandlingError::full(
-            e.to_string(), handling_started, &ctx.store, fuel_init, ctx.cold_start, false
+            e.to_string(), handling_started, ctx.store, fuel_init, ctx.cold_start, false
     ))?;
     
     
@@ -99,14 +98,14 @@ async fn instantiate_and_run(ctx: &mut JobContext<'_>, module: Option<Arc<Module
         e.to_string(), ctx.handling_started, ctx.store, ctx.fuel_init, ctx.cold_start, false
     ))?;
     
-    match run_wasm(instance, &mut ctx.store, &ctx.input).await {
+    match run_wasm(instance, ctx.store, ctx.input).await {
         Ok(result) => {
-            let packet = MetricsPacket::new(ctx.handling_started, &ctx.store, ctx.fuel_init, ctx.cold_start, true);
-            return Ok((result, packet));
+            let packet = MetricsPacket::new(ctx.handling_started, ctx.store, ctx.fuel_init, ctx.cold_start, true);
+            Ok((result, packet))
         }
         Err(e) => {
-            let result = JobHandlingError::full(e.to_string(), ctx.handling_started, &ctx.store, ctx.fuel_init, ctx.cold_start, false);
-            return Err(result);
+            let result = JobHandlingError::full(e.to_string(), ctx.handling_started, ctx.store, ctx.fuel_init, ctx.cold_start, false);
+            Err(result)
         }
     }
 }
