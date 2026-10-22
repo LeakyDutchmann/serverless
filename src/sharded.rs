@@ -19,17 +19,6 @@ impl<K, V> ShardedMap<K, V> {
     }
 }
 
-trait Merge {
-    fn merge(&mut self, other: Self);
-}
-
-impl Merge for usize {
-    ///merge for usize provides adding logic, keep that in mind
-    fn merge(&mut self, other: Self) {
-        *self += other;
-    }
-}
-
 pub trait Sharded<K, V>
 where 
     K: Hash + Eq + Clone,
@@ -42,14 +31,16 @@ where
     fn snapshot(&self) -> impl Future<Output = Vec<(K, V)>>;
     fn clear(&self) -> impl Future<Output = ()>;
     fn len(&self) -> impl Future<Output = usize>;
-    fn update(&self, key: &K, new_value: V) -> impl Future<Output = Option<V>>;
     fn shards(&self) -> usize;
+    async fn modify<F>(&self, key: &K, f: F) -> Option<V>
+    where
+        F: FnOnce(&mut V);
 }
 
 impl<K, V> Sharded<K, V> for ShardedMap<K, V>
     where 
         K: Hash + Eq + Clone, 
-        V: Clone + Merge,
+        V: Clone,
 {
     fn get_shard_idx(&self, key: &K) -> usize {
         let mut hasher = DefaultHasher::new();
@@ -57,17 +48,19 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         (hasher.finish() as usize) % self.shards.len()
 
     }
-    ///Updates value according to it's type's implementation of Merge trait
-    async fn update(&self, key: &K, new_value: V) -> Option<V> {
+    ///This method calls a updates stored value according to passed in closure and returns new value. If there's no value present in map, returns None
+    async fn modify<F>(&self, key: &K, f: F) -> Option<V>
+    where
+        F: FnOnce(&mut V)
+    {
         let idx = self.get_shard_idx(key);
-        
         let mut map = self.shards[idx].write().await;
+    
         if let Some(val) = map.get_mut(key) {
-            val.merge(new_value);
-            return Some(val.clone())
+            f(val);
+            return Some(val.clone());
         }
         None
-        
     }
     ///Returns clone of a value stored in map from shard determined by hash of key
     async fn get(&self, key: &K) -> Option<V> {
@@ -159,7 +152,7 @@ mod sharded_tests {
             map.insert(s.to_string(), i).await;
             let v = map.get(s).await;
             assert_eq!(i, v.unwrap());
-            map.update(s, 1).await;
+            map.modify(s, |v| *v += 1).await;
             let v = map.get(s).await;
             assert_eq!(i + 1, v.unwrap());
             map.remove(s).await;
