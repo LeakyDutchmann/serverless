@@ -1,4 +1,5 @@
 use crate::scheduler::types::SchedulerCommand;
+use crate::sharded::{Sharded, ShardedMap};
 use crate::workers::model::{WorkerId, WorkerLoad};
 
 use tokio::sync::mpsc::Sender;
@@ -12,7 +13,7 @@ use tokio::time::{Duration, interval};
 pub async fn start_load_loop(
     max_workers: usize,
     load_tx: Sender<SchedulerCommand>,
-    l_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
+    l_map: Arc<ShardedMap<WorkerId, WorkerLoad>>,
 ) -> JoinHandle<()> {
     
     tokio::spawn(async move {
@@ -20,11 +21,8 @@ pub async fn start_load_loop(
         let max_workers = max_workers;
         loop {
             interval.tick().await;
-            let l_snap = {
-                let map = l_map.read().await;
-                let l_snap: Vec<(usize, WorkerLoad)> = map.iter().map(|(id, l)| (*id, l.clone())).collect();
-                l_snap
-            };
+            let l_snap = l_map.snapshot().await;
+            
             let workers = l_snap.len();
             let mut busy_workes: Vec<(usize, usize)> = Vec::with_capacity(workers);
             let mut future_workers = workers;

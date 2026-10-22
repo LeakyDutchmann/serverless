@@ -1,5 +1,6 @@
 use crate::workers::model::{{WorkerSignal, WorkerId, WorkerLoad}};
 use crate::scheduler::types::JobResult;
+use crate::sharded::{ShardedMap, Sharded};
 
 use tokio::time::Instant;
 use tokio::sync::oneshot::Sender as OneShotSender;
@@ -9,23 +10,29 @@ use tokio::sync::RwLock;
 
 pub async fn handle_feedback(
     job_map: Arc<RwLock<HashMap<usize, OneShotSender<JobResult>>>>,
-    load_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>, 
+    load_map: Arc<ShardedMap<WorkerId, WorkerLoad>>, 
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     signal: WorkerSignal
 )  {
+    let tracked_closure = |l: &mut WorkerLoad| -> bool {
+        if l.task_count > 0 {
+            l.task_count -= 1;
+            true
+        } else {
+            false
+        }
+    };
+    
     match signal {
         WorkerSignal::HeartBeat { w_id } => {
             let mut map = heartbeat_map.write().await;
             map.insert(w_id, Instant::now());
         }
         WorkerSignal::Working {w_id, j_id: _} => {   
-            let mut load_map = load_map.write().await;
-            if let Some(load) = load_map.get_mut(&w_id) {
-                load.task_count += 1;
-                load.last_task_time = Instant::now();
+            if let Some(_) = load_map.modify(&w_id, |l| {l.task_count += 1; l.last_task_time = Instant::now()}).await {
                 // println!("Worker {} started task {}", w_id, j_id);
             } else {
-                load_map.insert(w_id, WorkerLoad { task_count: 1, last_task_time: Instant::now() });
+                load_map.insert(w_id, WorkerLoad { task_count: 1, last_task_time: Instant::now() }).await;
             }
         }
         WorkerSignal::Finished {w_id, j_id, result} => {
@@ -35,20 +42,8 @@ pub async fn handle_feedback(
             };
             
             if let Some(tx) = tx {
-                let tracked = {
-                    let mut load_map = load_map.write().await;
-                    if let Some(load) = load_map.get_mut(&w_id) {
-                        if load.task_count != 0 {
-                            load.task_count -= 1;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                };
-
+                let tracked = load_map.modify(&w_id, tracked_closure).await.unwrap_or(false);
+                
                 if !tracked {
                     println!("Worker {} finished untracked task", w_id);
                 }
@@ -65,20 +60,7 @@ pub async fn handle_feedback(
             };
             
             if let Some(tx) = tx {
-                let tracked = {
-                    let mut load_map = load_map.write().await;
-                    if let Some(load) = load_map.get_mut(&w_id) {
-                        if load.task_count != 0 {
-                            load.task_count -= 1;
-                            true
-                        } else {
-                            false
-                        }      
-                    } else {
-                        false
-        
-                    }
-                };
+                let tracked = load_map.modify(&w_id, tracked_closure).await.unwrap_or(false);
 
                 if !tracked {
                     println!("Worker {} failed untracked task, reason: {}", w_id, reason);

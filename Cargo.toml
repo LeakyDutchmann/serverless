@@ -27,3 +27,5 @@ wasmtime = { version = "47.0.3", features = ["cranelift"] }
 
 [profile.release]
 debug = true
+
+[dev-dependencies]

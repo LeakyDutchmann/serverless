@@ -30,7 +30,7 @@ pub async fn handle_telemetry(
             CacherTelemetry::ModuleCached{path} => {
                 let map_len = stats_map.len().await; 
                 
-                if let Some(stats) = stats_map.modify(&path, |s| s.cached_instances += 1).await {
+                if let Some(stats) = stats_map.modify(&path, |s| -> ModuleStats {s.cached_instances += 1; return s.clone()}).await {
                     cache_memory_usage.fetch_add(stats.memory_usage, std::sync::atomic::Ordering::Relaxed);
                     println!("Module cached: {}, memory_usage: {}", path, stats.memory_usage);
                     return;
@@ -81,7 +81,7 @@ pub async fn handle_telemetry(
                 
             },
             CacherTelemetry::ModuleEvicted{path} => {
-                if let Some(stats) = stats_map.modify(&path, |s| {s.last_eviction = Some(instant); s.cached_instances -= 1}).await {
+                if let Some(stats) = stats_map.modify(&path, |s| -> ModuleStats {s.last_eviction = Some(instant); s.cached_instances -= 1; return s.clone()}).await {
                     let current = cache_memory_usage.load(std::sync::atomic::Ordering::Relaxed);
                     if stats.memory_usage <= current {
                         cache_memory_usage.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::Relaxed);

@@ -1,5 +1,5 @@
 use crate::workers::model::{Worker, WorkerId, WorkerLoad};
-use crate::sharded::ShardedMap;
+use crate::sharded::{ShardedMap, Sharded};
 use super::shutdown::Shutdown;
 use super::loops::load_loop::model::start_load_loop;
 use super::loops::hb_loop::model::start_hb_loop;
@@ -44,13 +44,13 @@ pub struct Scheduler {
     int_channels: Option<InternalChannels>,
     tasks: Option<RuntimeTasks>,
     db_pool: MySqlPool,
-    load_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
+    load_map: Arc<ShardedMap<WorkerId, WorkerLoad>>,
 }
 
 impl Scheduler {
     pub async fn initialize(worker_amount: usize, max_workers: usize, job_rx: Receiver<Job>, db_pool: MySqlPool, shutdown_tx: Sender<Shutdown>) -> Self {
         let mut workers = Vec::new();
-        let mut load_map: HashMap<WorkerId, WorkerLoad> = HashMap::new();
+        let mut load_map: ShardedMap<WorkerId, WorkerLoad> = ShardedMap::new(12);
         let int_channels = InternalChannels::init();
         let ext_channels = ExternalChannels::init(job_rx, shutdown_tx);
         
@@ -69,7 +69,7 @@ impl Scheduler {
             ext_channels,
             tasks: None,
             db_pool,
-            load_map: Arc::new(RwLock::new(load_map)),
+            load_map: Arc::new(load_map),
         }
     }
     pub async fn run(&mut self) {
@@ -143,7 +143,7 @@ impl Scheduler {
         }
         workers.clear();
         self.tasks.as_mut().unwrap().abort();
-        self.load_map.write().await.clear();
+        self.load_map.clear().await;
     }
 }
 

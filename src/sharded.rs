@@ -32,9 +32,9 @@ where
     fn clear(&self) -> impl Future<Output = ()>;
     fn len(&self) -> impl Future<Output = usize>;
     fn shards(&self) -> usize;
-    async fn modify<F>(&self, key: &K, f: F) -> Option<V>
+    fn modify<F, R>(&self, key: &K, f: F) -> impl std::future::Future<Output = Option<R>>
     where
-        F: FnOnce(&mut V);
+        F: FnOnce(&mut V) -> R;
 }
 
 impl<K, V> Sharded<K, V> for ShardedMap<K, V>
@@ -48,17 +48,17 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         (hasher.finish() as usize) % self.shards.len()
 
     }
-    ///This method calls a updates stored value according to passed in closure and returns new value. If there's no value present in map, returns None
-    async fn modify<F>(&self, key: &K, f: F) -> Option<V>
+    ///This method calls a updates stored value according to passed in closure and returns closure output if there is any output. If there's no value present in map, returns None
+    async fn modify<F, R>(&self, key: &K, f: F) -> Option<R>
     where
-        F: FnOnce(&mut V)
+        F: FnOnce(&mut V) -> R
     {
         let idx = self.get_shard_idx(key);
         let mut map = self.shards[idx].write().await;
     
         if let Some(val) = map.get_mut(key) {
-            f(val);
-            return Some(val.clone());
+            let result = f(val);
+            return Some(result);
         }
         None
     }

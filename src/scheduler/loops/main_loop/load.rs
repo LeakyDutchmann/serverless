@@ -1,5 +1,6 @@
 use crate::workers::model::{Worker, WorkerId, WorkerLoad};
 use crate::scheduler::types::InternalChannels;
+use crate::sharded::ShardedMap;
 
 use crate::scheduler::{types::SchedulerCommand, utils::{upgrade, downgrade, drop_dead_worker}};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
@@ -15,7 +16,7 @@ pub async fn handle_load(
     db_pool: MySqlPool,
     internal_channels: &InternalChannels,
     workers: Arc<RwLock<Vec<Worker>>>,
-    load_map: Arc<RwLock<HashMap<WorkerId, WorkerLoad>>>,
+    load_map: Arc<ShardedMap<WorkerId, WorkerLoad>>,
     gcc_tx: BcastSender<GCCSignal>,
     cmd: SchedulerCommand,
     m_tx: Sender<(String, MetricsPacket)>,
