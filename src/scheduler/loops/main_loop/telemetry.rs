@@ -2,6 +2,7 @@ use crate::workers::model::CacherTelemetry;
 use crate::scheduler::types::ModuleStats;
 use crate::scheduler::shutdown::Shutdown;
 use crate::http::utils::get_function_name;
+use crate::sharded::{ShardedMap, Sharded};
 
 use tokio::time::Instant;
 use sqlx::{MySqlPool, Row};
@@ -16,7 +17,7 @@ const MAX_STATS_ENTRIES: usize = 50_000;
 
 //If you ever get to implementaton of f_paths_map, then remeber to not aquire lock for too long because it blocks your gcc loop. 
 pub async fn handle_telemetry(
-    stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
+    stats_map: Arc<ShardedMap<String, ModuleStats>>,
     _forbidden_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
     db_pool: MySqlPool,
@@ -27,16 +28,13 @@ pub async fn handle_telemetry(
         let instant = Instant::now();
         match tl_signal {
             CacherTelemetry::ModuleCached{path} => {
-                let mut map = stats_map.write().await;
-                let map_len = map.len(); 
+                let map_len = stats_map.len().await; 
                 
-                if let Some(stats) = map.get_mut(&path) {
-                    stats.cached_instances += 1;
+                if let Some(stats) = stats_map.modify(&path, |s| s.cached_instances += 1).await {
                     cache_memory_usage.fetch_add(stats.memory_usage, std::sync::atomic::Ordering::Relaxed);
                     println!("Module cached: {}, memory_usage: {}", path, stats.memory_usage);
                     return;
                 }  
-                drop(map);
 
                 let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
                     .bind(path.clone())
@@ -56,11 +54,8 @@ pub async fn handle_telemetry(
                             return;
                         }
                         
-
-                       
                         if map_len < MAX_STATS_ENTRIES {
-                            let mut map = stats_map.write().await;
-                            map.insert(path.clone(), ModuleStats {
+                            stats_map.insert(path.clone(), ModuleStats {
                                 first_invocation: instant,
                                 invokations: 1,
                                 last_invocation: instant,
@@ -68,7 +63,7 @@ pub async fn handle_telemetry(
                                 last_eviction: None,
                                 cached_instances: 1,
                                 memory_usage: memory_usage as usize,
-                            });
+                            }).await;
                             cache_memory_usage.fetch_add(memory_usage as usize, std::sync::atomic::Ordering::Relaxed);
                             println!("CACHING: Added module on path: {}, memory_usage: {}", path, memory_usage);
                         } else {
@@ -86,10 +81,7 @@ pub async fn handle_telemetry(
                 
             },
             CacherTelemetry::ModuleEvicted{path} => {
-                let mut map = stats_map.write().await;
-                if let Some(stats) = map.get_mut(&path) {
-                    stats.last_eviction = Some(instant);
-                    stats.cached_instances -= 1;
+                if let Some(stats) = stats_map.modify(&path, |s| {s.last_eviction = Some(instant); s.cached_instances -= 1}).await {
                     let current = cache_memory_usage.load(std::sync::atomic::Ordering::Relaxed);
                     if stats.memory_usage <= current {
                         cache_memory_usage.fetch_sub(stats.memory_usage, std::sync::atomic::Ordering::Relaxed);
@@ -98,21 +90,16 @@ pub async fn handle_telemetry(
                         let _ = shutdown_tx.send(Shutdown{reason: format!("Inconsistent memory usage counter. Using less memory than expected. Using: {}, expected min: {}", current, stats.memory_usage), instant: tokio::time::Instant::now()}).await;
                     }
                     if stats.cached_instances == 0 {
-                        map.remove(&path);
+                        stats_map.remove(&path).await;
                     }
                 }
             },
             CacherTelemetry::ModuleUsed{path} => {
-                let mut map = stats_map.write().await;
-                let map_len = map.len();
+                let map_len = stats_map.len().await;
                 
-                if let Some(stats) = map.get_mut(&path) {
-                    stats.invokations += 1;
-                    stats.pre_last_invocation = Some(stats.last_invocation);
-                    stats.last_invocation = instant;
+                if let Some(_) = stats_map.modify(&path, |s| {s.invokations += 1; s.pre_last_invocation = Some(s.last_invocation); s.last_invocation = instant}).await {
                     return;
                 }
-                drop(map);
                 
                 let func_name = get_function_name(&path);
                 let result = sqlx::query("SELECT memory_usage FROM functions WHERE path = ?")
@@ -134,8 +121,7 @@ pub async fn handle_telemetry(
                         }
                         
                         if map_len < MAX_STATS_ENTRIES {
-                            let mut map = stats_map.write().await;
-                            map.insert(path.clone(), ModuleStats {
+                            stats_map.insert(path.clone(), ModuleStats {
                                 invokations: 1,
                                 first_invocation: instant,
                                 last_invocation: instant,
@@ -143,7 +129,7 @@ pub async fn handle_telemetry(
                                 last_eviction: None,
                                 cached_instances: 0,
                                 memory_usage: memory_usage as usize,
-                            });
+                            }).await;
                         }
                     }                    
                     Ok(None) => {

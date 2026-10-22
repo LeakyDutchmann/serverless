@@ -1,5 +1,6 @@
 use crate::workers::model::Worker;
 use crate::scheduler::types::ModuleStats;
+use crate::sharded::{Sharded, ShardedMap};
 
 use tokio::time::{Instant, interval};
 use tokio::task::JoinHandle;
@@ -30,7 +31,7 @@ const MAX_MEMORY_USAGE: usize = 512_000_000;
 pub async fn start_gcc_loop
 (
     workers: Arc<RwLock<Vec<Worker>>>,
-    s_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
+    s_map: Arc<ShardedMap<String, ModuleStats>>,
     f_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
     cache_tx: BcastSender<GCCSignal>,
@@ -49,9 +50,7 @@ pub async fn start_gcc_loop
             };
             
             let (stats_snap, f_snap) = {
-                let map = s_map.read().await; 
-                let stats_snap: Vec<(String, ModuleStats)> = map.iter().map(|(p, s)| (p.clone(), s.clone())).collect();
-                drop(map);
+                let stats_snap = s_map.snapshot().await;
                 let f_map = f_paths.read().await;
                 let f_snap: HashSet<String> = f_map.iter().cloned().collect();
                 drop(f_map);

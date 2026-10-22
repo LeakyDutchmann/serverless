@@ -2,6 +2,7 @@ use crate::workers::model::Worker;
 use crate::scheduler::types::{Job, ModuleStats, InternalChannels};
 use crate::workers::model::WorkerId;
 use crate::workers::model::WorkerLoad;
+use crate::sharded::ShardedMap;
 
 
 use crate::scheduler::{types::{SchedulerCommand, JobResult}, shutdown::Shutdown};
@@ -36,7 +37,7 @@ pub async fn start_main_loop(
     forbidden_paths: Arc<RwLock<HashSet<String>>>,
     cache_memory_usage: Arc<AtomicUsize>,
     next_worker: Arc<AtomicUsize>,
-    stats_map: Arc<RwLock<HashMap<String, ModuleStats>>>,
+    stats_map: Arc<ShardedMap<String, ModuleStats>>,
     shutdown_tx: Sender<Shutdown>,
     m_tx: Sender<(String, MetricsPacket)>,
 ) -> JoinHandle<()> {
