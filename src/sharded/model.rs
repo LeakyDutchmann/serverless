@@ -1,9 +1,9 @@
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::RwLock;
 use std::collections::HashMap;
 use std::hash::{Hasher, Hash, DefaultHasher};
 
 pub struct ShardedMap<K, V> {
-    pub shards: Vec<RwLock<HashMap<K, V>>>
+    shards: Vec<RwLock<HashMap<K, V>>>
 }
 
 impl<K, V> ShardedMap<K, V> {
@@ -23,19 +23,26 @@ trait Merge {
     fn merge(&mut self, other: Self);
 }
 
+impl Merge for usize {
+    ///merge for usize provides adding logic, keep that in mind
+    fn merge(&mut self, other: Self) {
+        *self += other;
+    }
+}
+
 pub trait Sharded<K, V>
 where 
     K: Hash + Eq + Clone,
     V: Clone 
 {
     fn get_shard_idx(&self, key: &K) -> usize;
-    async fn get(&self, key: &K) -> Option<V>;
-    async fn insert(&self, key: K, value: V);
-    async fn remove(&self, key: &K) -> Option<V>;
-    async fn snapshot(&self) -> Vec<(K, V)>;
-    async fn clear(&self);
-    async fn len(&self) -> usize;
-    async fn update(&self, key: &K, new_value: V) -> Option<V>;
+    fn get(&self, key: &K) -> impl Future<Output = Option<V>>;
+    fn insert(&self, key: K, value: V) -> impl Future<Output = ()>;
+    fn remove(&self, key: &K) -> impl Future<Output = Option<V>>;
+    fn snapshot(&self) -> impl Future<Output = Vec<(K, V)>>;
+    fn clear(&self) -> impl Future<Output = ()>;
+    fn len(&self) -> impl Future<Output = usize>;
+    fn update(&self, key: &K, new_value: V) -> impl Future<Output = Option<V>>;
     fn shards(&self) -> usize;
 }
 
@@ -50,6 +57,7 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         (hasher.finish() as usize) % self.shards.len()
 
     }
+    ///Updates value according to it's type's implementation of Merge trait
     async fn update(&self, key: &K, new_value: V) -> Option<V> {
         let idx = self.get_shard_idx(key);
         
@@ -61,6 +69,7 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         None
         
     }
+    ///Returns clone of a value stored in map from shard determined by hash of key
     async fn get(&self, key: &K) -> Option<V> {
         let idx = self.get_shard_idx(&key);
         
@@ -70,11 +79,13 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         }
         None
     }
+    ///Inserts key-value pair into map from shard that is determined by hash of key. If value is present, then it is replaced
     async fn insert(&self, key: K, value: V) {
         let idx = self.get_shard_idx(&key);
         let mut map = self.shards[idx].write().await;
         map.insert(key, value);
     }
+    ///Removes and returns a value stored in map from shard determined by hash of key
     async fn remove(&self, key: &K) -> Option<V> {
         let idx = self.get_shard_idx(key);
         let mut map = self.shards[idx].write().await;
@@ -91,6 +102,7 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         }
         len
     }
+    ///Collects clones of all items from maps into single vec
     async fn snapshot(&self) -> Vec<(K, V)> {
         let mut vec = Vec::new();
         for shard in &self.shards {
@@ -109,5 +121,63 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
     }
     fn shards(&self) -> usize {
         self.shards.len()
+    }
+}
+
+#[cfg(test)]
+mod sharded_tests {
+    use super::*;
+    
+    #[test]
+    fn test_idx() {
+        let map: ShardedMap<String, usize> = ShardedMap::new(12);
+        let strings: Vec<String> = vec!["logtx", "kick", "boom", "black", "krow", "geek"].iter().map(|v| v.to_string()).collect();
+        let mut counts = vec![0usize; 12];
+        for s in strings.iter() {
+            let idx = map.get_shard_idx(s);
+            counts[idx] += 1;
+        }
+        for c in counts {
+            assert!(c <= 2);
+        }
+
+        let s = String::from("patH");
+        let hash = map.get_shard_idx(&s);
+        for _ in 0..5 {
+            let idx = map.get_shard_idx(&s);
+            assert_eq!(hash, idx);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_insert_update() {
+        let map: ShardedMap<String, usize> = ShardedMap::new(64);
+        
+        let strings: Vec<String> = vec!["logtx", "kick", "boom", "black", "krow", "geek"].iter().map(|v| v.to_string()).collect();
+
+        for (i, s) in strings.iter().enumerate() {
+            map.insert(s.to_string(), i).await;
+            let v = map.get(s).await;
+            assert_eq!(i, v.unwrap());
+            map.update(s, 1).await;
+            let v = map.get(s).await;
+            assert_eq!(i + 1, v.unwrap());
+            map.remove(s).await;
+            assert_eq!(None, map.get(s).await);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_snapshot() {
+        let map: ShardedMap<String, usize> = ShardedMap::new(12);
+
+        let strings: Vec<String> = vec!["logtx", "kick", "boom", "black", "krow", "geek"].iter().map(|v| v.to_string()).collect();
+        for (i, s) in strings.iter().enumerate() {
+            map.insert(s.to_string(), i).await;
+        }
+        let snapshot = map.snapshot().await;
+        for (s, usize) in snapshot {
+            assert_eq!(strings[usize], s)
+        }
     }
 }
