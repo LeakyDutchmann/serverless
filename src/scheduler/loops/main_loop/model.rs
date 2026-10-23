@@ -26,7 +26,7 @@ use tokio::sync::RwLock;
 
 pub async fn start_main_loop(
     load_map: Arc<ShardedMap<WorkerId, WorkerLoad>>,
-    job_map: Arc<RwLock<HashMap<usize, OneShotSender<JobResult>>>>,
+    job_map: Arc<ShardedMap<usize, OneShotSender<JobResult>>>,
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     mut job_rx: Receiver<Job>,
     workers: Arc<RwLock<Vec<Worker>>>,

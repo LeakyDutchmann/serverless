@@ -1,6 +1,6 @@
 use crate::workers::model::Worker;
 use crate::scheduler::types::ModuleStats;
-use crate::sharded::{Sharded, ShardedMap};
+use crate::sharded::ShardedMap;
 
 use tokio::time::{Instant, interval};
 use tokio::task::JoinHandle;

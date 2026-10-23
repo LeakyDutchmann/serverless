@@ -2,7 +2,7 @@ use crate::workers::model::{Worker, WorkerSignal, Message, CacherTelemetry, Work
 use super::model::NEXT_JOB_ID;
 use super::loops::gcc_loop::model::{GCCSignal, BcastSender};
 use crate::scheduler::loops::metrics::model::MetricsPacket;
-use crate::sharded::{ShardedMap, Sharded};
+use crate::sharded::ShardedMap;
 
 use tokio::sync::mpsc::Sender;
 use sqlx::MySqlPool;

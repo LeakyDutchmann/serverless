@@ -103,6 +103,15 @@ impl<K, V> ShardedMap<K, V>
     pub fn shards(&self) -> usize {
         self.shards.len()
     }
+    pub async fn contains_key(&self, key: &K) -> bool {
+        let idx = self.get_shard_idx(key);
+        let map = self.shards[idx].read().await;
+        if map.contains_key(&key) {
+            return true;
+        } else {
+            return false;
+        }
+    }
 }
 
 #[cfg(test)]

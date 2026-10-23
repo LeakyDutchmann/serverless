@@ -1,6 +1,6 @@
 use crate::workers::model::{{WorkerSignal, WorkerId, WorkerLoad}};
 use crate::scheduler::types::JobResult;
-use crate::sharded::{ShardedMap, Sharded};
+use crate::sharded::ShardedMap;
 
 use tokio::time::Instant;
 use tokio::sync::oneshot::Sender as OneShotSender;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub async fn handle_feedback(
-    job_map: Arc<RwLock<HashMap<usize, OneShotSender<JobResult>>>>,
+    job_map: Arc<ShardedMap<usize, OneShotSender<JobResult>>>,
     load_map: Arc<ShardedMap<WorkerId, WorkerLoad>>, 
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
     signal: WorkerSignal
@@ -36,10 +36,7 @@ pub async fn handle_feedback(
             }
         }
         WorkerSignal::Finished {w_id, j_id, result} => {
-            let tx = {
-                let mut j_map = job_map.write().await;
-                j_map.remove(&j_id)
-            };
+            let tx = job_map.remove(&j_id).await;
             
             if let Some(tx) = tx {
                 let tracked = load_map.modify(&w_id, tracked_closure).await.unwrap_or(false);
@@ -54,10 +51,7 @@ pub async fn handle_feedback(
             }     
         }
         WorkerSignal::Failed {w_id, j_id, reason} => {
-            let tx = {
-                let mut j_map = job_map.write().await;
-                j_map.remove(&j_id)
-            };
+            let tx = job_map.remove(&j_id).await;
             
             if let Some(tx) = tx {
                 let tracked = load_map.modify(&w_id, tracked_closure).await.unwrap_or(false);

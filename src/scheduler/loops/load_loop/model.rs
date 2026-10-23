@@ -1,5 +1,5 @@
 use crate::scheduler::types::SchedulerCommand;
-use crate::sharded::{Sharded, ShardedMap};
+use crate::sharded::ShardedMap;
 use crate::workers::model::{WorkerId, WorkerLoad};
 
 use tokio::sync::mpsc::Sender;

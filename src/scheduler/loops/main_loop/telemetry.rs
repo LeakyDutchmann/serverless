@@ -2,7 +2,7 @@ use crate::workers::model::CacherTelemetry;
 use crate::scheduler::types::ModuleStats;
 use crate::scheduler::shutdown::Shutdown;
 use crate::http::utils::get_function_name;
-use crate::sharded::{ShardedMap, Sharded};
+use crate::sharded::ShardedMap;
 
 use tokio::time::Instant;
 use sqlx::{MySqlPool, Row};

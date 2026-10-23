@@ -1,5 +1,5 @@
 use crate::workers::model::{Worker, WorkerId, WorkerLoad};
-use crate::sharded::{ShardedMap, Sharded};
+use crate::sharded::ShardedMap;
 use super::shutdown::Shutdown;
 use super::loops::load_loop::model::start_load_loop;
 use super::loops::hb_loop::model::start_hb_loop;
@@ -19,7 +19,7 @@ use tokio::sync::RwLock;
 
 struct RuntimeState {
     heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
-    job_map: Arc<RwLock<HashMap<usize, OneShotSender<JobResult>>>>,
+    job_map: Arc<ShardedMap<usize, OneShotSender<JobResult>>>,
     stats_map: Arc<ShardedMap<String, ModuleStats>>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>
 }
@@ -28,7 +28,7 @@ impl RuntimeState {
     fn new() -> RuntimeState {
         RuntimeState {
             heartbeat_map: Arc::new(RwLock::new(HashMap::new())),
-            job_map: Arc::new(RwLock::new(HashMap::new())),
+            job_map: Arc::new(ShardedMap::new(64)),
             stats_map: Arc::new(ShardedMap::new(64)),
             forbidden_paths: Arc::new(RwLock::new(HashSet::new())),
         }
