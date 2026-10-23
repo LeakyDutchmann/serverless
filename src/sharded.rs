@@ -19,28 +19,9 @@ impl<K, V> ShardedMap<K, V> {
     }
 }
 
-pub trait Sharded<K, V>
-where 
-    K: Hash + Eq + Clone,
-    V: Clone 
-{
-    fn get_shard_idx(&self, key: &K) -> usize;
-    fn get(&self, key: &K) -> impl Future<Output = Option<V>>;
-    fn insert(&self, key: K, value: V) -> impl Future<Output = ()>;
-    fn remove(&self, key: &K) -> impl Future<Output = Option<V>>;
-    fn snapshot(&self) -> impl Future<Output = Vec<(K, V)>>;
-    fn clear(&self) -> impl Future<Output = ()>;
-    fn len(&self) -> impl Future<Output = usize>;
-    fn shards(&self) -> usize;
-    fn modify<F, R>(&self, key: &K, f: F) -> impl std::future::Future<Output = Option<R>>
-    where
-        F: FnOnce(&mut V) -> R;
-}
-
-impl<K, V> Sharded<K, V> for ShardedMap<K, V>
+impl<K, V> ShardedMap<K, V>
     where 
         K: Hash + Eq + Clone, 
-        V: Clone,
 {
     fn get_shard_idx(&self, key: &K) -> usize {
         let mut hasher = DefaultHasher::new();
@@ -49,7 +30,7 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
 
     }
     ///This method calls a updates stored value according to passed in closure and returns closure output if there is any output. If there's no value present in map, returns None
-    async fn modify<F, R>(&self, key: &K, f: F) -> Option<R>
+    pub async fn modify<F, R>(&self, key: &K, f: F) -> Option<R>
     where
         F: FnOnce(&mut V) -> R
     {
@@ -63,23 +44,27 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         None
     }
     ///Returns clone of a value stored in map from shard determined by hash of key
-    async fn get(&self, key: &K) -> Option<V> {
+    pub async fn get<F, R>(&self, key: &K, f: F) -> Option<R> 
+    where 
+        F: FnOnce(&V) -> R
+    {
         let idx = self.get_shard_idx(&key);
         
         let map = self.shards[idx].read().await;
         if let Some(val) = map.get(key) {
-            return Some(val.clone());
+            let result = f(&val);
+            return Some(result)
         }
         None
     }
     ///Inserts key-value pair into map from shard that is determined by hash of key. If value is present, then it is replaced
-    async fn insert(&self, key: K, value: V) {
+    pub async fn insert(&self, key: K, value: V) {
         let idx = self.get_shard_idx(&key);
         let mut map = self.shards[idx].write().await;
         map.insert(key, value);
     }
     ///Removes and returns a value stored in map from shard determined by hash of key
-    async fn remove(&self, key: &K) -> Option<V> {
+    pub async fn remove(&self, key: &K) -> Option<V> {
         let idx = self.get_shard_idx(key);
         let mut map = self.shards[idx].write().await;
         if let Some(val) = map.remove(key) {
@@ -87,7 +72,7 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         }
         None
     }
-    async fn len(&self) -> usize {
+    pub async fn len(&self) -> usize {
         let mut len = 0;
         for shard in &self.shards {
             let lock = shard.read().await;
@@ -96,7 +81,10 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         len
     }
     ///Collects clones of all items from maps into single vec
-    async fn snapshot(&self) -> Vec<(K, V)> {
+    pub async fn snapshot(&self) -> Vec<(K, V)>
+    where 
+        V: Clone,
+    {
         let mut vec = Vec::new();
         for shard in &self.shards {
             let lock = shard.read().await;
@@ -106,13 +94,13 @@ impl<K, V> Sharded<K, V> for ShardedMap<K, V>
         }
         vec
     }
-    async fn clear(&self) {
+    pub async fn clear(&self) {
         for shard in &self.shards {
             let mut lock = shard.write().await;
             lock.clear();
         }
     }
-    fn shards(&self) -> usize {
+    pub fn shards(&self) -> usize {
         self.shards.len()
     }
 }
@@ -150,13 +138,13 @@ mod sharded_tests {
 
         for (i, s) in strings.iter().enumerate() {
             map.insert(s.to_string(), i).await;
-            let v = map.get(s).await;
+            let v = map.get(s, |v| v.clone()).await;
             assert_eq!(i, v.unwrap());
             map.modify(s, |v| *v += 1).await;
-            let v = map.get(s).await;
+            let v = map.get(s, |v| v.clone()).await;
             assert_eq!(i + 1, v.unwrap());
             map.remove(s).await;
-            assert_eq!(None, map.get(s).await);
+            assert_eq!(None, map.get(s, |v| v.clone()).await);
         }
     }
 
