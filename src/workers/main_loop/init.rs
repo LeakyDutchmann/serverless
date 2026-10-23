@@ -12,13 +12,14 @@ use tokio::time::{interval, Duration};
 use crate::workers::model::{CacherTelemetry, WorkerSignal, Message};
 use super::handler::handle_job;
 use crate::scheduler::loops::metrics::model::MetricsPacket;
+use crate::sharded::ShardedMap;
 
 pub async fn start_main_loop(
     engine: Engine,
     db_pool: MySqlPool,
     tl_tx: Sender<CacherTelemetry>,
     fb_tx: Sender<WorkerSignal>,
-    cache: Arc<RwLock<HashMap<String, Arc<Module>>>>,
+    cache: Arc<ShardedMap<String, Arc<Module>>>,
     jobs: Arc<RwLock<Vec<JoinHandle<()>>>>,
     id: usize,
     mut rx: Receiver<Message>,

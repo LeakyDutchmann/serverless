@@ -9,6 +9,7 @@ use crate::http::utils::get_function_name;
 use super::wasm_utils::run_wasm;
 use crate::scheduler::loops::metrics::model::MetricsPacket;
 use super::wasm_imports::model::CallerTable;
+use crate::sharded::ShardedMap;
 use super::wasm_utils::create_wasm_instance;
 
 pub struct JobHandlingError {
@@ -38,7 +39,7 @@ impl JobHandlingError {
 pub async fn handle_job(
     path: String,
     engine: Engine,
-    cache_map: Arc<RwLock<HashMap<String, Arc<Module>>>>,
+    cache_map: Arc<ShardedMap<String, Arc<Module>>>,
     input: &[u8],
     db_pool: MySqlPool,
 ) -> Result<(Vec<u8>, MetricsPacket), JobHandlingError>{
@@ -56,10 +57,7 @@ pub async fn handle_job(
         }
     };
     
-    let module = {
-        let map = cache_map.read().await;
-        map.get(&func_name).cloned()
-    };
+    let module = cache_map.get(&func_name, |m| Arc::clone(&m)).await;
 
     let mut ctx = JobContext {
         engine: &engine,

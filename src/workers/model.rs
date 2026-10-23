@@ -2,6 +2,7 @@ use crate::scheduler::loops::gcc_loop::model::{BcastSender, GCCSignal};
 use crate::scheduler::loops::metrics::model::MetricsPacket;
 use super::cache_manager::start_cache_loop;
 use super::main_loop::init::start_main_loop;
+use crate::sharded::ShardedMap;
 
 
 use tokio::task::JoinHandle;
@@ -70,7 +71,7 @@ pub struct Worker {
 impl Worker {
     pub async fn spawn(id: usize, db_pool: MySqlPool, fb_tx: Sender<WorkerSignal>, tl_tx: Sender<CacherTelemetry>, gcc_tx: BcastSender<GCCSignal>, m_tx: Sender<(String, MetricsPacket)>) -> Self {
         let (tx, rx) = channel::<Message>(4096);
-        let cache: Arc<RwLock<HashMap<String, Arc<Module>>>> = Arc::new(RwLock::new(HashMap::new()));
+        let cache: Arc<ShardedMap<String, Arc<Module>>> = Arc::new(ShardedMap::new(64));
         let jobs: Arc<RwLock<Vec<JoinHandle<()>>>> = Arc::new(RwLock::new(Vec::new()));
         let jobs_clone = Arc::clone(&jobs);
 

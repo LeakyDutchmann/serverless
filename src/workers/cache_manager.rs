@@ -9,16 +9,17 @@ use std::sync::Arc;
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
 use crate::http::utils::get_function_name;
 use crate::workers::model::{CacherTelemetry, CacheErr};
+use crate::sharded::ShardedMap;
 
 
 
-pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastSender<GCCSignal>, tl_tx: Sender<CacherTelemetry>, cache: Arc<RwLock<HashMap<String, Arc<Module>>>>) ->  JoinHandle<()>{
+pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastSender<GCCSignal>, tl_tx: Sender<CacherTelemetry>, cache: Arc<ShardedMap<String, Arc<Module>>>) ->  JoinHandle<()>{
     tokio::spawn(async move {
         let mut rx = gcc_tx.subscribe();
         while let Ok(signal) = rx.recv().await {
             match signal {
                 GCCSignal::CacheModule { path } => {
-                    if cache.read().await.contains_key(&path) {
+                    if cache.contains_key(&path).await {
                         continue;
                     }
                     
@@ -43,7 +44,7 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                                     continue;
                                 }
                             };
-                            let _ = cache.write().await.insert(func_name.clone(), Arc::new(module));
+                            let _ = cache.insert(func_name.clone(), Arc::new(module)).await;
                             let _ = tl_tx.send(CacherTelemetry::ModuleCached { path: path.clone()}).await;
                         },
                         Ok(None) => {
@@ -56,7 +57,7 @@ pub async fn start_cache_loop(engine: Engine, db_pool: MySqlPool, gcc_tx: BcastS
                 }
                 GCCSignal::EvictModule { path } => {
                     let func_name = get_function_name(&path);
-                    if let Some(_) = cache.write().await.remove(&func_name) {
+                    if let Some(_) = cache.remove(&func_name).await {
                         let _ = tl_tx.send(CacherTelemetry::ModuleEvicted { path }).await;
                     }
                 }
