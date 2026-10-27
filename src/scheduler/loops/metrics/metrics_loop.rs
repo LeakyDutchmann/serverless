@@ -47,7 +47,6 @@ pub fn start_metrics_loop(
 async fn handle_queue_flush(db_pool: MySqlPool, arc_map: Arc<RwLock<HashMap<String, MetricsRecord>>>) {
     let mut map = arc_map.write().await;
     for (path, record) in map.drain() {
-        println!("Metrics flush: upserting record for path: {}", path);
         match upsert_record(path.clone(), record.clone(), db_pool.clone()).await {
             Ok(_) => {println!("Metrics upserted successfully");},
             Err(e) => {
