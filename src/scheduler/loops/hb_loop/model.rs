@@ -1,22 +1,23 @@
 use crate::scheduler::types::SchedulerCommand;
+use crate::workers::model::WorkerId;
+use crate::sharded::ShardedMap;
+
 use tokio::{sync::mpsc::Sender, time::{Instant, interval}};
 use tokio::task::JoinHandle;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::time::Duration;
 
-pub async fn start_hb_loop(hb_tx: Sender<SchedulerCommand>, h_map: Arc<RwLock<HashMap<usize, Instant>>>,) -> JoinHandle<()> {
+pub async fn start_hb_loop(hb_tx: Sender<SchedulerCommand>, h_map: Arc<ShardedMap<WorkerId, Instant>>,) -> JoinHandle<()> {
     
     tokio::spawn(async move {
-        let mut interval = interval(Duration::from_secs(3));
+        let mut interval = interval(Duration::from_secs(5));
         let sender = hb_tx.clone();
         loop {
             interval.tick().await;
-            let heartbeat_map = h_map.read().await;
-            for (id, last_heartbeat) in heartbeat_map.iter() {
+            let heartbeat_snap = h_map.snapshot().await;
+            for (id, last_heartbeat) in heartbeat_snap.iter() {
                 if Instant::now().duration_since(*last_heartbeat) > Duration::from_secs(6) {
-                    let _ = sender.send(SchedulerCommand::DropDeadWorker(*id)).await;
+                    let _ = sender.send(SchedulerCommand::DropDeadWorker(id.clone())).await;
                 }
             }
         }

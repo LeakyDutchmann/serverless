@@ -1,4 +1,4 @@
-use crate::workers::model::{WorkerSignal, CacherTelemetry};
+use crate::{scheduler::loops::metrics::model::CTCMetrics, workers::model::{CacherTelemetry, WorkerId, WorkerSignal}};
 
 use super::loops::{gcc_loop::model::{GCCSignal, BcastSender}, metrics::model::MetricsPacket};
 use super::shutdown::Shutdown;
@@ -29,13 +29,14 @@ impl JobResult {
 pub struct Job {
     pub path: String,
     pub input: Vec<u8>,
-    pub respond_to: OneShotSender<JobResult>,
+    pub respond_to: OneShotSender<(JobResult, CTCMetrics)>,
+    pub ctc_metrics: CTCMetrics,
 }
 
 pub enum SchedulerCommand {
     Upgrade(usize),
-    Downgrade(usize),
-    DropDeadWorker(usize)
+    Downgrade(WorkerId),
+    DropDeadWorker(WorkerId)
 }
 
 pub struct RuntimeTasks {

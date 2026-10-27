@@ -7,7 +7,7 @@ use crate::sharded::ShardedMap;
 
 use crate::scheduler::{types::{SchedulerCommand, JobResult}, shutdown::Shutdown};
 use crate::scheduler::loops::gcc_loop::model::{GCCSignal, BcastSender};
-use crate::scheduler::loops::metrics::model::MetricsPacket;
+use crate::scheduler::loops::metrics::model::{CTCMetrics, MetricsPacket};
 use super::feedback::handle_feedback;
 use super::job::handle_job;
 use super::load::handle_load;
@@ -26,8 +26,8 @@ use tokio::sync::RwLock;
 
 pub async fn start_main_loop(
     load_map: Arc<ShardedMap<WorkerId, WorkerLoad>>,
-    job_map: Arc<ShardedMap<usize, OneShotSender<JobResult>>>,
-    heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
+    job_map: Arc<ShardedMap<usize, OneShotSender<(JobResult, CTCMetrics)>>>,
+    heartbeat_map: Arc<ShardedMap<WorkerId, Instant>>,
     mut job_rx: Receiver<Job>,
     workers: Arc<RwLock<Vec<Worker>>>,
     mut load_rx: Receiver<SchedulerCommand>,
@@ -46,17 +46,58 @@ pub async fn start_main_loop(
         loop {
             select! {
                 Some(worker_signal) = internal_channels.feedback.rx.recv() => {
-                    handle_feedback(Arc::clone(&job_map), Arc::clone(&load_map), Arc::clone(&heartbeat_map), worker_signal).await;     
+                    let job_map = Arc::clone(&job_map);
+                    let load_map = Arc::clone(&load_map);
+                    let heartbeat_map = Arc::clone(&heartbeat_map);
+                    
+                    tokio::spawn(async move {
+                        handle_feedback(job_map, load_map, heartbeat_map, worker_signal).await;
+                    });
+                         
                 }
                 Some(task) = job_rx.recv() => {
-                    handle_job(Arc::clone(&workers), Arc::clone(&next_worker), Arc::clone(&job_map), task);
+                    let workers = Arc::clone(&workers);
+                    let next_worker = Arc::clone(&next_worker);
+                    let job_map = Arc::clone(&job_map);
+                    
+                    tokio::spawn(async move {
+                        handle_job(workers, next_worker, job_map, task).await;
+                    });
+                    
                 }
                 Some(cmd) = load_rx.recv() => {
-                    handle_load(db_pool.clone(), &internal_channels, Arc::clone(&workers), Arc::clone(&load_map), gcc_tx.clone(), cmd, m_tx.clone()).await;
+                    let db_pool = db_pool.clone();
+                    let workers = Arc::clone(&workers);
+                    let load_map = Arc::clone(&load_map);
+                    let gcc_tx = gcc_tx.clone();
+                    let m_tx = m_tx.clone();
+                    let feedback_tx = internal_channels.feedback.tx.clone();
+                    let tl_tx = internal_channels.telemetry.tx.clone();
+                    
+                    tokio::spawn(async move {
+                        handle_load(db_pool, feedback_tx, tl_tx, workers, load_map, gcc_tx, cmd, m_tx).await;
+                    });
+                    
                     
                 }
                 Some(tl_signal) = internal_channels.telemetry.rx.recv() => {
-                    handle_telemetry(Arc::clone(&stats_map), Arc::clone(&forbidden_paths), Arc::clone(&cache_memory_usage), db_pool.clone(), tl_signal, shutdown_tx.clone()).await;
+                    let stats_map = Arc::clone(&stats_map);
+                    let forbidden_paths = Arc::clone(&forbidden_paths);
+                    let cache_memory_usage = Arc::clone(&cache_memory_usage);
+                    let db_pool = db_pool.clone();
+                    let shutdown_tx = shutdown_tx.clone();
+                    
+                    tokio::spawn(async move {
+                        handle_telemetry(
+                            stats_map,
+                            forbidden_paths,
+                            cache_memory_usage,
+                            db_pool,
+                            tl_signal,
+                            shutdown_tx
+                        ).await;
+                    });
+                    
                 }
             }
         }

@@ -4,6 +4,7 @@ use wasmtime::{Engine, Module};
 use tokio::task::JoinHandle;
 use tokio::select;
 use tokio::sync::RwLock;
+use tokio::time::Instant;
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::time::{interval, Duration};
@@ -11,7 +12,8 @@ use tokio::time::{interval, Duration};
 
 use crate::workers::model::{CacherTelemetry, WorkerSignal, Message};
 use super::handler::handle_job;
-use crate::scheduler::loops::metrics::model::MetricsPacket;
+use crate::workers::model::WorkerId;
+use crate::scheduler::loops::metrics::model::{MetricsPacket, CTCMetrics};
 use crate::sharded::ShardedMap;
 
 pub async fn start_main_loop(
@@ -21,7 +23,7 @@ pub async fn start_main_loop(
     fb_tx: Sender<WorkerSignal>,
     cache: Arc<ShardedMap<String, Arc<Module>>>,
     jobs: Arc<RwLock<Vec<JoinHandle<()>>>>,
-    id: usize,
+    id: WorkerId,
     mut rx: Receiver<Message>,
     m_tx: Sender<(String, MetricsPacket)>,
 ) -> JoinHandle<()> {
@@ -47,21 +49,30 @@ pub async fn start_main_loop(
                             println!("Worker {} stopped", id);
                             break;
                         },
-                        Message::Job{path, input, j_id} => {
+                        Message::Job{path, input, j_id, mut ctc_metrics} => {
+                            ctc_metrics.sheduler_to_worker = Some(Instant::now().duration_since(ctc_metrics.last_action));
                             let cache_map = Arc::clone(&cache);
                             let tx = m_tx.clone();
                             let job = tokio::spawn(async move {
+                                let mut ctc_m = ctc_metrics;
+                                let h_started = Instant::now();
                                 let _ = fb.send(WorkerSignal::Working{w_id: id, j_id}).await;
                                 match handle_job(path.clone(), engine, cache_map, &input, db).await {
                                     Ok((result, metrics)) => {
-                                        let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result}).await;
+                                        let h_ended = Instant::now();
+                                        ctc_m.execution_time = Some(h_ended.duration_since(h_started));
+                                        ctc_m.last_action = h_ended;
+                                        let _ = fb.send(WorkerSignal::Finished{w_id: id, j_id, result, ctc_m}).await;
                                         let _ = tx.send((path.clone(), metrics)).await;
                                     },
                                     Err(e) => {
+                                        let h_ended = Instant::now();
+                                        ctc_m.execution_time = Some(h_ended.duration_since(h_started));
+                                        ctc_m.last_action = h_ended;
                                         if let Some(metrics) = e.metrics {
                                             let _ = tx.send((path.clone(), metrics)).await;
                                         }
-                                        let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.message}).await;
+                                        let _ = fb.send(WorkerSignal::Failed{w_id: id, j_id, reason: e.message, ctc_m}).await;
                                     }
                                 }
                                 let _ = tl.send(CacherTelemetry::ModuleUsed{path}).await;

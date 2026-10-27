@@ -4,26 +4,29 @@ use super::api::delete::delete;
 use crate::http::utils::{get_body_len, parse_request_line, read_body_chunked, read_headers};
 use crate::http::response::{Response, send, StatusCode};
 use crate::scheduler::types::Job;
+use crate::scheduler::loops::metrics::model::CTCMetrics;
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::Sender;
 use tokio::io::AsyncReadExt;
 use sqlx::MySqlPool;
+use tokio::time::Instant;
 use wasmtime::Engine;
 
 pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Sender<Job>, wasm_engine: Engine) {
     let mut keep_alive;
     let break_reason;
     loop {
-            let (headers_buf, leftover, _headers_end) = match read_headers(&mut stream).await {
-            Ok((headers, leftover, hn)) => (headers, leftover, hn),
-            Err(e) => {
-                // println!("Error reading headers: {}", e);
-                let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("{}", e)), false);
-                send(&mut stream, &response).await;
-                return;
-            }
+        let (headers_buf, leftover, _headers_end) = match read_headers(&mut stream).await {
+        Ok((headers, leftover, hn)) => (headers, leftover, hn),
+        Err(e) => {
+            // println!("Error reading headers: {}", e);
+            let response = Response::new(StatusCode::BadRequest, vec![], Some(format!("{}", e)), false);
+            send(&mut stream, &response).await;
+            return;
+        }
         };
+        let start = Instant::now();
         
         let headers_str = String::from_utf8_lossy(&headers_buf).to_string();
         keep_alive = !headers_str.contains("connection: close") && !headers_str.contains("Connection: close");
@@ -75,7 +78,7 @@ pub async fn handle_connection(mut stream: TcpStream, db_pool: MySqlPool, tx: Se
                     if path.starts_with("/functions") {
                         deploy(&body, &path, &db_pool, &wasm_engine, keep_alive).await
                     } else if path.starts_with("/invoke") {
-                        execute(&buffer, &path, tx.clone(), keep_alive).await
+                        execute(&buffer, &path, tx.clone(), keep_alive, start).await
                     } else {
                         break_reason = format!("Invalid Request: {}, {}", method, path);
                         break;

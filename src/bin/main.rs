@@ -23,7 +23,7 @@ async fn main() {
     let db_pool = connect(&db_url, 10).await.expect("Failed to connect to a database, panicking!");
     
     //Start scheduler and spawn workers!
-    let mut scheduler = Scheduler::initialize(4, 40, rx, db_pool.clone(), shutdown_tx).await;
+    let mut scheduler = Scheduler::initialize(4, 24, rx, db_pool.clone(), shutdown_tx).await;
     scheduler.run().await;
     println!("Scheduler is running successfully");
 

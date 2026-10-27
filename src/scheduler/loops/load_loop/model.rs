@@ -4,10 +4,8 @@ use crate::workers::model::{WorkerId, WorkerLoad};
 
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::Instant;
-use tokio::sync::RwLock;
 use tokio::time::{Duration, interval};
 
 pub async fn start_load_loop(
@@ -24,21 +22,21 @@ pub async fn start_load_loop(
             let l_snap = l_map.snapshot().await;
             
             let workers = l_snap.len();
-            let mut busy_workes: Vec<(usize, usize)> = Vec::with_capacity(workers);
+            let mut busy_workes: Vec<(WorkerId, usize)> = Vec::with_capacity(workers);
             let mut future_workers = workers;
             for (id, load) in l_snap.iter() {
                 // println!("load of {} is {}", id, load.task_count);
                 if load.task_count >= 4 {
-                    busy_workes.push((*id, load.task_count));
+                    busy_workes.push((id.clone(), load.task_count));
                 }
                 
                 if future_workers > 4
                     && load.task_count == 0
                         && Instant::now().duration_since(load.last_task_time) > Duration::from_secs(30) {
-                            let _ = load_tx.send(SchedulerCommand::Downgrade(*id)).await;
+                            let _ = load_tx.send(SchedulerCommand::Downgrade(id.clone())).await;
                             future_workers -= 1;
                             println!("Sent downgrade command");  
-                        }
+                }   
             }
             println!("busy workers: {}", busy_workes.len());
             if busy_workes.len() as f64 >= workers as f64 * 0.75

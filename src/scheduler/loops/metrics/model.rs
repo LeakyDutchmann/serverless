@@ -4,6 +4,19 @@ use tokio::time::{Duration, Instant};
 use wasmtime::Store;
 use crate::workers::main_loop::wasm_imports::model::CallerTable;
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CTCMetrics {
+    #[serde(skip)]
+    pub last_action: Instant,
+    pub request_processing_time: Option<Duration>,
+    pub handler_to_scheduler: Option<Duration>,
+    pub execution_time: Option<Duration>,
+    pub sheduler_to_worker: Option<Duration>,
+    pub worker_to_scheduler: Option<Duration>,
+    pub sheduler_to_handler: Option<Duration>,
+    pub scheduler_to_handler_send: Option<Duration>
+}
+
 #[derive(Debug, Clone)]
 pub struct MetricsPacket {
     pub success: bool,

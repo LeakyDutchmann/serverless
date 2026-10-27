@@ -4,7 +4,7 @@ use crate::sharded::ShardedMap;
 
 use tokio::time::{Instant, interval};
 use tokio::task::JoinHandle;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::RwLock;
 use tokio::time::Duration;

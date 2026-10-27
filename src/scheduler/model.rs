@@ -1,3 +1,4 @@
+use crate::scheduler::loops::metrics::model::CTCMetrics;
 use crate::workers::model::{Worker, WorkerId, WorkerLoad};
 use crate::sharded::ShardedMap;
 use super::shutdown::Shutdown;
@@ -18,16 +19,16 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 struct RuntimeState {
-    heartbeat_map: Arc<RwLock<HashMap<usize, Instant>>>,
-    job_map: Arc<ShardedMap<usize, OneShotSender<JobResult>>>,
+    heartbeat_map: Arc<ShardedMap<WorkerId, Instant>>,
+    job_map: Arc<ShardedMap<usize, OneShotSender<(JobResult, CTCMetrics)>>>,
     stats_map: Arc<ShardedMap<String, ModuleStats>>,
     forbidden_paths: Arc<RwLock<HashSet<String>>>
 }
 
 impl RuntimeState {
-    fn new() -> RuntimeState {
+    fn new(max_workers: usize) -> RuntimeState {
         RuntimeState {
-            heartbeat_map: Arc::new(RwLock::new(HashMap::new())),
+            heartbeat_map: Arc::new(ShardedMap::new(max_workers)),
             job_map: Arc::new(ShardedMap::new(64)),
             stats_map: Arc::new(ShardedMap::new(64)),
             forbidden_paths: Arc::new(RwLock::new(HashSet::new())),
@@ -50,14 +51,14 @@ pub struct Scheduler {
 impl Scheduler {
     pub async fn initialize(worker_amount: usize, max_workers: usize, job_rx: Receiver<Job>, db_pool: MySqlPool, shutdown_tx: Sender<Shutdown>) -> Self {
         let mut workers = Vec::new();
-        let mut load_map: ShardedMap<WorkerId, WorkerLoad> = ShardedMap::new(12);
+        let load_map: ShardedMap<WorkerId, WorkerLoad> = ShardedMap::new(12);
         let int_channels = InternalChannels::init();
         let ext_channels = ExternalChannels::init(job_rx, shutdown_tx);
         
         for i in 1..=worker_amount {
             let pool = db_pool.clone();
-            let worker = Worker::spawn(i, pool, int_channels.feedback.tx.clone(), int_channels.telemetry.tx.clone(), ext_channels.gcc_tx.clone().unwrap(), ext_channels.metrics_tx.clone()).await;
-            load_map.insert(i, WorkerLoad::default());
+            let worker = Worker::spawn(WorkerId(i), pool, int_channels.feedback.tx.clone(), int_channels.telemetry.tx.clone(), ext_channels.gcc_tx.clone().unwrap(), ext_channels.metrics_tx.clone()).await;
+            load_map.insert(WorkerId(i), WorkerLoad::default()).await;
             workers.push(worker);
         }
         
@@ -89,7 +90,7 @@ impl Scheduler {
         let cache_memory_usage: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let next_worker: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(1));
 
-        let state = RuntimeState::new();
+        let state = RuntimeState::new(self.max_workers);
         let main_loop = start_main_loop(
             Arc::clone(&load_map),
             state.job_map,
